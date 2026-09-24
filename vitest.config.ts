@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // The demo generator follows local office hours; one time zone makes runs identical locally and in CI.
+    env: { TZ: 'UTC' },
     // Playwright specs run separately (pnpm e2e).
     exclude: ['**/node_modules/**', '**/dist/**', 'apps/web/e2e/**'],
     coverage: {

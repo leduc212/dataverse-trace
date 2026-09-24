@@ -115,19 +115,21 @@ describe('generateDemo', () => {
     const audits: AuditRecord[] = demo.audits.map((r) => ({ ...mapAudit(r), ...auditChanges(demo.auditDetails[String(r['auditid'])]!) }));
     expect(audits.length).toBeGreaterThan(5000);
     const runs = demo.flowRuns.map(mapFlowRun);
-    const ran = (a: AuditRecord) => {
+    const story = (a: AuditRecord) => {
       const record = { table: a.table, id: a.recordId, name: '' };
       const save = findSaves({ record, audits: [a], traceLogs: [], asyncOps: [] })[0]!;
-      const story = buildRecordStory(save, { record, audits: [a], traceLogs: logs.filter((l) => Math.abs(l.start - a.createdOn) < 60_000), asyncOps: [], flowRuns: runs, processes: [], steps: new Map(), now: NOW });
-      return story.trace.spans.map((s) => s.name).join('|');
+      return buildRecordStory(save, { record, audits: [a], traceLogs: logs.filter((l) => Math.abs(l.start - a.createdOn) < 60_000), asyncOps: [], flowRuns: runs, processes: [], steps: new Map(), now: NOW });
     };
     const updates = audits.filter((a) => a.table === 'hbr_policy' && a.operation === 'update');
-    const quiet = updates.filter((a) => a.changedColumns!.every((c) => c === 'hbr_description')).slice(0, 60);
+    const quiet = updates.filter((a) => a.changedColumns!.every((c) => c === 'hbr_description'));
     const premium = updates.filter((a) => a.changedColumns!.includes('hbr_premium')).slice(0, 60);
-    expect(quiet.length).toBe(60);
-    // A description-only save runs no plug-in steps, so no operation is found for it.
-    expect(quiet.filter((a) => /Policy(Validate|ErpSync)/.test(ran(a))).length).toBeLessThan(3);
-    expect(premium.filter((a) => /PolicyValidate/.test(ran(a))).length).toBeGreaterThan(50);
+    expect(quiet.length).toBeGreaterThan(200);
+    // A description-only save runs no plug-in steps. Another policy save at the same moment can
+    // still be matched by timing (I1): that must be rare, and never shown as exact.
+    const wrong = quiet.map(story).filter((s) => s.correlationId !== null);
+    expect(wrong.length / quiet.length).toBeLessThan(0.05);
+    expect(wrong.every((s) => s.correlationConfidence! < 1)).toBe(true);
+    expect(premium.filter((a) => story(a).trace.spans.some((s) => s.name.includes('PolicyValidate'))).length).toBeGreaterThan(50);
     // Rejected saves (PolicyValidate threw) rolled back: no audit row at that time for any policy.
     const rejected = logs.filter((l) => l.typeName === 'Harbor.Plugins.PolicyValidate' && l.exception);
     expect(rejected.length).toBeGreaterThan(5);

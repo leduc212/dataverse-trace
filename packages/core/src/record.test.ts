@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { expectedFor, type Observed } from './expected.ts';
-import { buildRecordStory, findSaves, parseRecordInput, type RecordStoryInput } from './record.ts';
+import { MAX_INFERRED_CONFIDENCE, buildRecordStory, findSaves, parseRecordInput, type RecordStoryInput } from './record.ts';
 import type { StepRegistration } from './records.ts';
 import { T0, asyncOp, audit, flowProcess, flowRun, step, traceLog, trigger } from './test-builders.ts';
 
@@ -60,11 +60,11 @@ describe('buildRecordStory', () => {
     expect(link).toMatchObject({ rule: 'R5', confidence: 1, type: 'triggeredBy' });
   });
 
-  it('I1: infers the operation from timing, table and message; full confidence when it is the only one', () => {
+  it('I1: infers the operation from timing, table and message; high but never exact confidence when it is the only one', () => {
     const inp = input({ audits: [audit()], traceLogs: pipeline('c1') });
     const story = buildRecordStory(findSaves(inp)[0]!, inp);
     expect(story.correlationId).toBe('c1');
-    expect(story.correlationConfidence).toBeCloseTo(1);
+    expect(story.correlationConfidence).toBe(MAX_INFERRED_CONFIDENCE);
     expect(story.trace.links.find((l) => l.rule === 'I1')!.evidence.map((e) => e.label).join(' | ')).toMatch(/inside this operation.*same table.*created by the user.*only operation/);
   });
 

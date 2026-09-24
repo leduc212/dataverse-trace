@@ -83,6 +83,8 @@ const TOLERANCE_MS = 1000;
 const SAVE_MERGE_MS = 5000;
 const FLOW_EARLY_MS = 2000;
 const FLOW_HALF_LIFE_MS = 20_000;
+/** Inferred links never reach 1, so they're never drawn as exact, however strong the evidence. */
+export const MAX_INFERRED_CONFIDENCE = 0.95;
 const cmp = (a: string | number, b: string | number) => (a < b ? -1 : a > b ? 1 : 0);
 const sameId = (a: string | null | undefined, b: string | null | undefined) => Boolean(a && b && a.toLowerCase() === b.toLowerCase());
 
@@ -247,7 +249,7 @@ function matchOperation(save: SaveEvent, input: RecordStoryInput, roots: Map<str
     best.evidence.push({ label: `${candidates.length} operations on ${record.table} ran at that time`, weight: 0 });
     best.score *= factor;
   }
-  best.score = Math.max(0.01, Math.min(1, best.score));
+  best.score = Math.max(0.01, Math.min(MAX_INFERRED_CONFIDENCE, best.score));
   return best;
 }
 
@@ -450,7 +452,7 @@ export function buildRecordStory(save: SaveEvent, input: RecordStoryInput): Reco
     if (peers.length && pairs.some((x) => x.saveId !== save.id)) {
       evidence.push({ label: `${peers.length} other save(s) of this record in the window; runs were paired one-to-one`, weight: 0 });
     }
-    confidence = Math.max(0.01, Math.min(1, confidence));
+    confidence = Math.max(0.01, Math.min(MAX_INFERRED_CONFIDENCE, confidence));
     const span = flowSpan(best.run, traceKey, best.run.flowName ?? p.name);
     span.queuedAt = save.time;
     spans.push(span);
