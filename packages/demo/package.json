@@ -1,0 +1,16 @@
+{
+  "name": "@dvt/demo",
+  "private": true,
+  "description": "Seeded demo environment (fictional Harbor Insurance) and a MockTransport that answers the app's OData queries.",
+  "type": "module",
+  "exports": {
+    ".": "./src/demo.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dvt/core": "workspace:*",
+    "@dvt/dataverse": "workspace:*"
+  }
+}

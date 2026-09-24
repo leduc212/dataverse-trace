@@ -23,7 +23,9 @@ pnpm install
 pnpm pack:spike
 ```
 
-This produces `spikes/s6-webresource/out/DataverseTraceSpikeS6_0_0_1.zip`, an unmanaged solution containing 5 web resources under `dvt_/spike/`.
+This produces `spikes/s6-webresource/out/DataverseTraceSpikeS6_0_0_2.zip`, an unmanaged solution containing 5 web resources under `dvt_/spike/`. Importing a newer version over an older one updates the same web resources (their IDs are derived from their names).
+
+Findings so far are in [research.md §2a](../../docs/plan/research.md#2a-spike-results-so-far).
 
 ## Get useful data first (optional but recommended)
 

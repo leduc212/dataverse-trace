@@ -67,6 +67,24 @@ Checked against Microsoft Learn on 2026-09-24. Where this document and the rest 
 
 **Positioning takeaway:** PTV already does a plugin-only correlation view, so "we group by correlation ID" is **not** a differentiator. What sets Dataverse Trace apart is: (1) **several sources** (plugins, system jobs, flows, audit) on one waterfall, with inferred links shown honestly; (2) **expected vs. actual**; (3) **history and trends** beyond 24 hours; (4) **watch mode**; (5) **shareable sessions and OTLP export**; (6) runs anywhere without installing anything, including a demo.
 
+## 2a. Spike results so far
+
+Run 1 of the S6 diagnostics page (v0.0.1), in the maintainer's dev environment on 2026-09-24, Edge 151:
+
+| Spike | Result |
+|---|---|
+| **S6 hosting** | ✅ **Confirmed.** Opened at `/WebResources/dvt_/spike/index.html`, the page and a **module worker** both call the Web API with the existing session (`WhoAmI` works in both). Dynamic `import()` chunks, IndexedDB, Web Locks, `CompressionStream` and `BroadcastChannel` all work in the page and in the worker. Storage quota is about 10 GB, not persisted by default. |
+| S6 details | JS web resources are served as **`text/jscript`**, which is a valid JavaScript MIME type, so modules and workers load. **No CSP and no `X-Frame-Options` header** on web-resource pages; `cache-control: private`. `Organization.MaxUploadFileSize` = 5,242,880 (the default). Still to check: the versioned `/%7B…%7D/` path (a check was added in v0.0.2). |
+| **S1 precision** | ⚠️ **The Web API returns whole seconds** for `asyncoperation` (`createdon`, `startedon`, `completedon`) and `flowrun` (`createdon`, `starttime`, `endtime`): all 25 sampled values had no fraction. Trace-log timestamps are still untested (tracing was Off). v0.0.2 adds a filter-bisection probe to see whether milliseconds are **stored** but not returned. |
+| **S4 (partial)** | `flowrun` rows were written **about 30 s to 5 min after the run ended**. Watch mode must show flows as "waiting for run data". This user could read `flowrun` rows. |
+| S2, S5, audit | Not tested yet: plug-in tracing was **Off** and auditing was **off** in this environment. The test plugins in `dotnet/TestPlugins` provide sync, async, nested and failing executions for the next run. |
+
+**Design consequences already applied in v0.1** (whole-second timestamps are assumed until S1 shows otherwise):
+- Sibling order inside a pipeline comes from **stage and execution order**, and positions within a second are laid out one after another and marked as *estimated*. Durations (from the platform, in ms) are shown as exact.
+- System-job durations under a second are shown as "< 1 s", and a job is stretched to cover the activity it ran.
+- Nesting (R3) uses a feasibility test instead of plain time containment. With a ±1 s tolerance, a short sibling step would otherwise "contain" a nested request. See architecture §7 for the rule and its measured accuracy.
+- An assumption was tested and dropped: that trace rows are written in completion order (so `createdon` could order nested steps). When the platform writes them isn't documented, so R3 doesn't use it.
+
 ## 2. Things not yet verified: spikes before building on them
 
 | # | Question | Why it matters | How to check |

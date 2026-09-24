@@ -1,0 +1,31 @@
+{
+  "name": "@dvt/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dataverse Trace web app. Runs as Dataverse web resources (real data) or on any static host (demo).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4174 --strictPort",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dvt/core": "workspace:*",
+    "@dvt/dataverse": "workspace:*",
+    "@dvt/demo": "workspace:*",
+    "@dvt/store": "workspace:*",
+    "@fluentui/react-components": "^9.74.9",
+    "@fluentui/react-icons": "^2.0.341",
+    "@tanstack/react-virtual": "^3.14.13",
+    "comlink": "^4.4.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.3.0"
+  }
+}

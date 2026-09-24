@@ -1,4 +1,4 @@
-export type Spike = 'env' | 'S6' | 'org' | 'S1' | 'S2' | 'S5';
+export type Spike = 'env' | 'S6' | 'org' | 'S1' | 'S2' | 'S4' | 'S5';
 export type Status = 'pass' | 'fail' | 'warn' | 'info';
 
 export interface CheckResult {

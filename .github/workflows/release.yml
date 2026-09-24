@@ -1,0 +1,36 @@
+# Push a tag like v0.1.0 to publish a GitHub Release with the solution zip attached.
+# The tag must match "version" in solution/solution.config.json and apps/web/package.json.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check the tag matches the solution version
+        run: |
+          version=$(node -p "require('./solution/solution.config.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match solution version $version" >&2
+            exit 1
+          fi
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm solution
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: out/*.zip
+          generate_release_notes: true

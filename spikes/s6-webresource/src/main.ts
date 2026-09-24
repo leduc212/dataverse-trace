@@ -4,7 +4,10 @@ import {
   orgChecks,
   s1Checks,
   s2Check,
+  s4Check,
   s5Check,
+  storedPrecisionCheck,
+  versionedPathCheck,
   whoAmICheck,
   workerChecks,
   type RunContext,
@@ -18,6 +21,7 @@ const GROUPS: Record<Spike, string> = {
   org: 'Organization',
   S1: 'S1 · Timestamp precision',
   S2: 'S2 · Meaning of plugintracelog.createdby',
+  S4: 'S4 · Flow run ingestion delay and visibility',
   S5: 'S5 · Async trace ↔ system job correlation',
 };
 
@@ -64,7 +68,7 @@ function render(): void {
 }
 
 function exportJson(): string {
-  let json = JSON.stringify({ tool: 'dataverse-trace spike S6', version: '0.0.1', ranAt, results }, null, 2);
+  let json = JSON.stringify({ tool: 'dataverse-trace spike S6', version: '0.0.2', ranAt, results }, null, 2);
   if (maskBox.checked) {
     json = json.split(location.host).join('<org-host>');
     [...ctx.personalNames]
@@ -87,11 +91,14 @@ async function run(): Promise<void> {
     ['environment', envChecks],
     ['Web API from the page', async () => [await whoAmICheck(ctx)]],
     ['dynamic import', async () => [await dynamicImportCheck()]],
+    ['versioned path', async () => [await versionedPathCheck()]],
     ['worker', workerChecks],
     ['page storage', () => storageChecks('page')],
     ['organization settings', orgChecks],
     ['S1 timestamps', s1Checks],
+    ['S1 stored precision (about 100 small requests)', async () => [await storedPrecisionCheck()]],
     ['S2 createdby', async () => [await s2Check(ctx)]],
+    ['S4 flow runs', async () => [await s4Check(ctx)]],
     ['S5 async correlation', async () => [await s5Check()]],
   ];
   for (const [label, step] of steps) {

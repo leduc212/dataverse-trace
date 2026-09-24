@@ -9,7 +9,10 @@ export interface RunContext {
   personalNames: Set<string>;
 }
 
-const JS_MIME = /^(text|application)\/(x-)?(javascript|ecmascript)\b/i;
+// The HTML spec's "JavaScript MIME type" list. Dataverse serves JS web resources as text/jscript,
+// which is on it, so module scripts and workers load fine.
+const JS_MIME =
+  /^(application\/(x-)?(javascript|ecmascript)|text\/(x-)?(javascript|ecmascript)|text\/javascript1\.[0-5]|text\/jscript|text\/livescript)\b/i;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const pickHeaders = (response: Response, names: string[]) =>
@@ -64,6 +67,32 @@ export function dynamicImportCheck(): Promise<CheckResult> {
   return check('s6.page.dynamic-import', 'S6', 'Code-split chunk via dynamic import()', async () => {
     const { lazyLoaded } = await import('./lazy.ts');
     return { status: 'pass', summary: lazyLoaded() };
+  });
+}
+
+export function versionedPathCheck(): Promise<CheckResult> {
+  return check('s6.versioned-path', 'S6', 'Loading under a versioned /%7B…%7D/ path', async () => {
+    // Site maps and Xrm.Navigation open web resources under /%7B<version>%7D/WebResources/…. The
+    // token only affects caching, so a made-up one should still be served. Relative imports then
+    // resolve inside that path.
+    // Resolve against the page URL, not import.meta.url: Vite rewrites `new URL('…', import.meta.url)`
+    // into a bundled asset reference.
+    const url = `${location.origin}/%7B000000000000000001%7D${new URL('lazy.js', location.href).pathname}`;
+    const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+    const type = response.headers.get('content-type') ?? '';
+    if (!response.ok || !JS_MIME.test(type)) {
+      return {
+        status: 'warn',
+        summary: `${response.status} "${type}" for a made-up version token; test via a site map later`,
+        details: { url },
+      };
+    }
+    const module = (await import(/* @vite-ignore */ url)) as { lazyLoaded: () => string };
+    return {
+      status: 'pass',
+      summary: `served as "${response.headers.get('content-type')}" and imported: ${module.lazyLoaded()}`,
+      details: { url },
+    };
   });
 }
 
@@ -180,6 +209,109 @@ export function s1Checks(): Promise<CheckResult[]> {
     precisionCheck('s1.flowrun', 'Flow run timestamps', 'flowruns', ['createdon', 'starttime', 'endtime']),
     precisionCheck('s1.audit', 'Audit timestamps (expected: milliseconds)', 'audits', ['createdon']),
   ]);
+}
+
+/**
+ * The Web API may drop milliseconds when returning a value and still store them. Bisect with
+ * `$filter=<id> eq … and <column> ge <value + offset>` to find the stored sub-second offset
+ * (about 11 requests per value). Offset 0 for every value means seconds are all we can get.
+ */
+async function storedOffsetMs(entitySet: string, idColumn: string, id: string, column: string, value: string): Promise<number | null> {
+  const base = Date.parse(value);
+  if (Number.isNaN(base) || !GUID.test(id)) return null;
+  const matches = async (offset: number) =>
+    (
+      await getJson<ODataCollection>(
+        `${entitySet}?$select=${idColumn}&$filter=${idColumn} eq ${id} and ${column} ge ${new Date(base + offset).toISOString()}`,
+        { annotations: false },
+      )
+    ).value.length > 0;
+  // Invariant: matches(lo) is true, matches(hi) is false. Allow −1 s in case the API rounds up.
+  let lo = -1000;
+  let hi = 1000;
+  if (!(await matches(lo)) || (await matches(hi))) return null;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (await matches(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+export function storedPrecisionCheck(): Promise<CheckResult> {
+  return check('s1.stored', 'S1', 'Stored sub-second precision (filter bisection)', async () => {
+    const targets: Array<{ entitySet: string; idColumn: string; column: string; orderBy: string }> = [
+      { entitySet: 'plugintracelogs', idColumn: 'plugintracelogid', column: 'performanceexecutionstarttime', orderBy: 'createdon' },
+      { entitySet: 'asyncoperations', idColumn: 'asyncoperationid', column: 'startedon', orderBy: 'createdon' },
+      { entitySet: 'flowruns', idColumn: 'flowrunid', column: 'starttime', orderBy: 'createdon' },
+    ];
+    const findings = [];
+    for (const t of targets) {
+      let rows: Row[] = [];
+      try {
+        rows = (
+          await getJson<ODataCollection>(
+            `${t.entitySet}?$select=${t.idColumn},${t.column}&$filter=${t.column} ne null&$orderby=${t.orderBy} desc&$top=3`,
+            { annotations: false },
+          )
+        ).value;
+      } catch (error) {
+        findings.push({ table: t.entitySet, column: t.column, error: (error as Error).message });
+        continue;
+      }
+      for (const row of rows) {
+        const returned = String(row[t.column]);
+        try {
+          const offset = await storedOffsetMs(t.entitySet, t.idColumn, String(row[t.idColumn]), t.column, returned);
+          findings.push({ table: t.entitySet, column: t.column, returned, storedOffsetMs: offset });
+        } catch (error) {
+          findings.push({ table: t.entitySet, column: t.column, returned, error: (error as Error).message });
+        }
+      }
+    }
+    const offsets = findings.flatMap((f) => ('storedOffsetMs' in f && typeof f.storedOffsetMs === 'number' ? [f.storedOffsetMs] : []));
+    if (offsets.length === 0) return { status: 'info', summary: 'no values could be bisected', details: findings };
+    const nonZero = offsets.filter((o) => o !== 0).length;
+    return {
+      status: nonZero > 0 ? 'pass' : 'warn',
+      summary:
+        nonZero > 0
+          ? `${nonZero}/${offsets.length} values have hidden milliseconds: stored precision is finer than what the API returns`
+          : `all ${offsets.length} values are whole seconds in storage too (or the filter truncates)`,
+      details: findings,
+    };
+  });
+}
+
+// ── S4: flow run ingestion delay and visibility ──────────────────────────────
+
+export function s4Check(ctx: RunContext): Promise<CheckResult> {
+  return check('s4.flowrun', 'S4', 'Flow run ingestion delay and visibility', async () => {
+    const rows = (
+      await getJson<ODataCollection>(
+        'flowruns?$select=starttime,endtime,createdon,status,_ownerid_value&$filter=endtime ne null&$orderby=createdon desc&$top=50',
+      )
+    ).value;
+    if (rows.length === 0) return { status: 'info', summary: 'no finished flow runs visible to this user' };
+    const delays = rows
+      .map((r) => (Date.parse(String(r['createdon'])) - Date.parse(String(r['endtime']))) / 1000)
+      .filter((d) => Number.isFinite(d))
+      .sort((a, b) => a - b);
+    const at = (q: number) => delays[Math.min(delays.length - 1, Math.floor(q * delays.length))] ?? NaN;
+    const owners = new Map<string, number>();
+    for (const r of rows) {
+      const name = formatted(r, '_ownerid_value');
+      if (name) ctx.personalNames.add(name);
+      const key = String(r['_ownerid_value']);
+      owners.set(key, (owners.get(key) ?? 0) + 1);
+    }
+    const yours = owners.get(ctx.userId ?? '') ?? 0;
+    return {
+      status: 'info',
+      summary: `row written ${at(0)}–${at(1)} s after the run ended (median ${at(0.5)} s, p90 ${at(0.9)} s) over ${delays.length} runs; ${owners.size} owner(s), ${yours}/${rows.length} runs owned by you`,
+      details: { delaySecondsSorted: delays, runsPerOwner: [...owners.entries()].map(([owner, runs]) => ({ isYou: owner === ctx.userId, runs })) },
+    };
+  });
 }
 
 // ── S2: what plugintracelog.createdby holds ──────────────────────────────────

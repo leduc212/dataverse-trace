@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Test plugins for trying Dataverse Trace against a real dev environment.
+    Builds with the .NET SDK on any OS (no Visual Studio): the reference-assemblies package supplies .NET Framework 4.6.2.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net462</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>DataverseTrace.TestPlugins</AssemblyName>
+    <RootNamespace>DataverseTrace.TestPlugins</RootNamespace>
+    <Version>0.1.0</Version>
+    <!-- Dataverse only accepts strong-named plugin assemblies. The key only identifies test code. -->
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>DataverseTrace.TestPlugins.snk</AssemblyOriginatorKeyFile>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CrmSdk.CoreAssemblies" Version="9.0.2.60" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

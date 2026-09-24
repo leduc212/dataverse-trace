@@ -1,0 +1,20 @@
+{
+  "name": "@dvt/store",
+  "private": true,
+  "description": "Local history in IndexedDB (Dexie): trace logs, trace text, system jobs, steps, sync state.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dvt/core": "workspace:*",
+    "@dvt/dataverse": "workspace:*",
+    "dexie": "^4.4.6"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
+  }
+}

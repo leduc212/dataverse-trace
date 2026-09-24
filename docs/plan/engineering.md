@@ -128,3 +128,15 @@ Without PR preview deploys, reviewers run `pnpm dev` locally, or look at the Pla
 - Feature flags (`settings.experimental.*`) for inferred rules that are still being calibrated.
 - An accessibility check (axe) in both component and E2E tests.
 - Issue templates: bug (with an "attach a redacted `.dvtrace.json`" prompt), feature, and a "correlation got it wrong" report that captures a fixture.
+
+## 7. Implementation notes for v0.1 (differences from the plan above)
+
+| Planned | What v0.1 does | Why |
+|---|---|---|
+| ECharts for charts | Small custom SVG charts (`apps/web/src/components/charts.tsx`): stacked columns, heatmap, sparkline | Three simple forms didn't justify a large dependency. They follow the validated palette and mark specs, with tooltips, legends and a table view. ECharts can come back if charts get richer. |
+| CodeMirror 6 for trace text | A light custom viewer (line numbers, find with next/previous, GUID highlighting, JSON pretty-printing) | Trace text is at most 10 KB, so a full editor isn't needed. |
+| TanStack Router, Zustand | A tiny hash router (`router.ts`) and React state with `useSyncExternalStore` | Four routes; web resources need hash routing anyway. |
+| Managed solution zip | **Unmanaged** zip from `tools/solution-packer` | Producing a managed zip without an environment is still an open question. Uninstalling means deleting the `dvt_/app/*` web resources plus the solution. |
+| Stable file names everywhere | Stable names for web resources; **content-hashed names for GitHub Pages** (`DVT_TARGET=pages`) | Dataverse busts caches with its version token; a static host doesn't, so stable names would serve stale scripts after a deploy. |
+| `exactOptionalPropertyTypes` everywhere | On in `core`, `dataverse`, `store`, `demo`; off in `apps/web` | It clashes with Fluent UI's prop types, and the domain packages are where it catches real bugs. |
+| Insights in v0.3 | A first set of rule-based findings is already on the v0.1 dashboard (loop depth, no filtering attributes, slow sync step, error rate, tracing off, trace text hidden) | They were cheap to compute from the step statistics and make the dashboard useful straight away. |

@@ -1,6 +1,6 @@
 # Dataverse Trace: product and technical plan
 
-> **Status:** plan agreed (2026-09-24), apart from D5 (test environment). Nothing has been built yet. Decisions are [at the end](#open-decisions).
+> **Status (2026-09-24):** plan agreed. **v0.1 is implemented** and waiting to be tested in a real environment (see the milestone table). Decisions are [at the end](#open-decisions).
 
 | Document | Contents |
 |---|---|
@@ -66,8 +66,8 @@ Rough sizing assumes one developer working part-time. Every milestone ends with 
 
 | Milestone | Goal | Contents | Size |
 |---|---|---|---|
-| **M0: Foundations** | Remove the technical unknowns | Spikes S1, S2, S5 and S6 (see [research](plan/research.md#2-things-not-yet-verified-spikes-before-building-on-them)); monorepo, CI and deploy pipeline; span model and first ADRs; demo generator skeleton; a "hello" web resource solution that calls `WhoAmI`, starts a web worker and writes to IndexedDB inside a real environment | 2 weeks |
-| **M1 → v0.1 "A better trace viewer"** (MVP) | Excellent at the basics, and already different | Connect, capability probe, sync of trace logs, system jobs and registrations, local history with coverage. **Explorer** (all P0 items). **Timeline by correlation ID** (exact rules R1–R5, R9). **Dashboard basics** (KPIs, step table, top lists, heatmap). **Demo mode** with scenarios 1 to 5. Released as a **managed solution zip** plus the demo site. README with a GIF. | 5–6 weeks |
+| **M0: Foundations** ✅ mostly done | Remove the technical unknowns | Spikes S1, S2, S5 and S6 (see [research](plan/research.md#2-things-not-yet-verified-spikes-before-building-on-them)); monorepo, CI and deploy pipeline; span model and first ADRs; demo generator skeleton; a "hello" web resource solution that calls `WhoAmI`, starts a web worker and writes to IndexedDB inside a real environment. **Done:** S6 confirmed; S1 partly answered (system jobs and flow runs return whole seconds); S2 and S5 wait for the test plugins (`dotnet/TestPlugins`). | 2 weeks |
+| **M1 → v0.1 "A better trace viewer"** (MVP) ✅ built, to be tested | Excellent at the basics, and already different | Connect, capability probe, sync of trace logs, system jobs and registrations, local history with coverage. **Explorer** (all P0 items). **Timeline by correlation ID** (exact rules R1–R5, R9). **Dashboard basics** (KPIs, step table, top lists, heatmap). **Demo mode** with scenarios 1 to 5. Released as a **solution zip** plus the demo site. README with a GIF. **Built:** everything listed except the README GIF, and the zip is unmanaged for now (see engineering §7). | 5–6 weeks |
 | **M2 → v0.2 "The record story"** | The core idea | Flow runs and flow events; audit on demand; **record-save timeline** with inferred I1/I2 links, confidence and evidence; **expected vs. actual**; **watch mode** (with the optional trace-setting switch); session export and import; copy as Markdown; demo scenarios 6 and 7 plus the guided tour. Spikes S3, S4. | 5–6 weeks |
 | **M3 → v0.3 "Insights"** | Beyond debugging | Trends from rollups with coverage bands; platform-stats snapshots (S8); **insight rules**; **cascade graph** with cycle detection; timeline polish (critical path, minimap). | 3–4 weeks |
 | **M4 → v1.0 "Polish and share"** | Portfolio-ready | OTLP export (S7); compare traces; static loop-risk graph; the **NuGet helper** plus published calibration of the inferred rules; docs site; accessibility audit; performance hardening against the NFR budgets; a launch post. | 4–5 weeks |

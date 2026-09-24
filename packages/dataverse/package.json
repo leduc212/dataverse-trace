@@ -1,0 +1,15 @@
+{
+  "name": "@dvt/dataverse",
+  "private": true,
+  "description": "Dataverse Web API access: transport, queries, mappers, capability probe, sync engine.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dvt/core": "workspace:*"
+  }
+}
