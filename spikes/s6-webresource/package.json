@@ -1,0 +1,14 @@
+{
+  "name": "@dvt/spike-s6",
+  "private": true,
+  "description": "Spike S6: prove the app can run as Dataverse web resources (session fetch, module worker, IndexedDB, locks). Also probes S1, S2, S5.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "vite": "^8.3.0"
+  }
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dataverse Trace: S6 diagnostics</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Dataverse Trace: spike S6 diagnostics</h1>
+      <p>
+        Read-only checks that decide whether Dataverse Trace can run as web resources, plus timestamp,
+        <code>createdby</code> and async-correlation probes (spikes S1, S2, S5). Nothing is written to Dataverse.
+      </p>
+      <div class="actions">
+        <button id="run" type="button">Run again</button>
+        <button id="copy" type="button" disabled>Copy results as JSON</button>
+        <button id="download" type="button" disabled>Download JSON</button>
+        <label><input id="mask" type="checkbox" checked /> Mask user names and org URL in the JSON</label>
+        <span id="status" role="status"></span>
+      </div>
+    </header>
+    <main id="results"></main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

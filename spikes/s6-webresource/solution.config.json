@@ -1,0 +1,16 @@
+{
+  "uniqueName": "DataverseTraceSpikeS6",
+  "displayName": "Dataverse Trace - Spike S6 diagnostics",
+  "description": "Temporary read-only diagnostics page for the Dataverse Trace project. Safe to delete.",
+  "version": "0.0.1",
+  "publisher": {
+    "uniqueName": "dataversetrace",
+    "displayName": "Dataverse Trace",
+    "prefix": "dvt",
+    "optionValuePrefix": 72311,
+    "website": "https://github.com/leduc212/dataverse-trace"
+  },
+  "distDir": "dist",
+  "webResourceRoot": "dvt_/spike/",
+  "outDir": "out"
+}

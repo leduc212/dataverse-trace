@@ -1,0 +1,22 @@
+{
+  "name": "dataverse-trace",
+  "private": true,
+  "description": "Everything that ran when a Dataverse record was saved, on one timeline.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "build:spike": "pnpm --filter @dvt/spike-s6 build",
+    "pack:spike": "pnpm build:spike && node tools/solution-packer/src/cli.ts --config spikes/s6-webresource/solution.config.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}
