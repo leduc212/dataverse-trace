@@ -1,9 +1,9 @@
 // The timeline: one row per span, bars on a shared time axis. Used by the trace page, the record
 // story, watch mode and imported sessions.
-import { formatDuration, type Span, type Trace, type WaterfallLayout, type WaterfallRow } from '@dvt/core';
-import { Badge, Button, Tooltip } from '@fluentui/react-components';
-import { ChevronDownRegular, ChevronRightRegular, DismissRegular, ErrorCircleFilled, ZoomFitRegular, ZoomInRegular, ZoomOutRegular } from '@fluentui/react-icons';
-import { useMemo, useState, type ReactNode } from 'react';
+import { criticalPath, formatDuration, type Span, type Trace, type WaterfallLayout, type WaterfallRow } from '@dvt/core';
+import { Badge, Button, Menu, MenuItemRadio, MenuList, MenuPopover, MenuTrigger, ToggleButton, Tooltip } from '@fluentui/react-components';
+import { ChevronDownRegular, ChevronRightRegular, DismissRegular, ErrorCircleFilled, FlashRegular, ZoomFitRegular, ZoomInRegular, ZoomOutRegular } from '@fluentui/react-icons';
+import { useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { useClient } from '../client.ts';
 import { STAGE_LABELS, formatTime, shortTypeName } from '../format.ts';
 import { recordUrl } from '../host.ts';
@@ -97,23 +97,145 @@ export function traceMarkdown(view: TimelineData, subtitle?: string): string {
   return lines.join('\n');
 }
 
+/** Link filters: every link, links of at least 50 % confidence, or exact links only. */
+type LinkFilter = 'all' | 'likely' | 'exact';
+const LINK_MIN: Record<LinkFilter, number> = { all: 0, likely: 0.5, exact: 1 };
+const LINK_LABELS: Record<LinkFilter, string> = { all: 'All links', likely: 'Links ≥ 50 %', exact: 'Exact links only' };
+
+/**
+ * An overview of the whole trace with the zoomed window marked. Drag across it to zoom to that
+ * part; click to move the window there.
+ */
+function Minimap({ layout, zoom, onZoom }: { layout: WaterfallLayout; zoom: [number, number] | null; onZoom: (z: [number, number] | null) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<[number, number] | null>(null);
+  const start = layout.start;
+  const span = Math.max(layout.end - start, 1);
+  const at = (clientX: number) => {
+    const box = ref.current!.getBoundingClientRect();
+    return start + (Math.min(Math.max(clientX - box.left, 0), box.width) / box.width) * span;
+  };
+  const x = (t: number) => `${((t - start) / span) * 100}%`;
+  const rows = layout.rows.filter((r) => r.span.kind !== 'audit');
+  const rowH = Math.max(1, Math.min(3, 30 / Math.max(rows.length, 1)));
+  const finish = (e: PointerEvent<HTMLDivElement>) => {
+    if (!drag) return;
+    const [a, b] = [Math.min(drag[0], at(e.clientX)), Math.max(drag[0], at(e.clientX))];
+    setDrag(null);
+    const box = ref.current!.getBoundingClientRect();
+    if (((b - a) / span) * box.width >= 4) {
+      onZoom(a <= start && b >= layout.end ? null : [a, b]);
+    } else if (zoom) {
+      // A click: keep the zoom width, centred where clicked.
+      const half = (zoom[1] - zoom[0]) / 2;
+      const mid = Math.min(Math.max(a, start + half), layout.end - half);
+      onZoom([mid - half, mid + half]);
+    }
+  };
+  return (
+    <div
+      ref={ref}
+      className="wf-minimap"
+      aria-hidden="true"
+      title="Drag across to zoom, click to move the zoomed window"
+      onPointerDown={(e) => {
+        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        const t = at(e.clientX);
+        setDrag([t, t]);
+      }}
+      onPointerMove={(e) => drag && setDrag([drag[0], at(e.clientX)])}
+      onPointerUp={finish}
+    >
+      {rows.map((r, i) => (
+        <span
+          key={r.span.id}
+          className="wf-minimap-bar"
+          style={{ left: x(r.displayStart), width: `max(1px, ${((r.displayEnd - r.displayStart) / span) * 100}%)`, top: 3 + i * rowH, height: rowH, background: KIND_COLOR[barClass(r.span)] }}
+        />
+      ))}
+      {zoom && <span className="wf-minimap-window" style={{ left: x(zoom[0]), width: `${((zoom[1] - zoom[0]) / span) * 100}%` }} />}
+      {drag && <span className="wf-minimap-drag" style={{ left: x(Math.min(...drag)), width: `${(Math.abs(drag[1] - drag[0]) / span) * 100}%` }} />}
+    </div>
+  );
+}
+
+/** Where the critical path's time went: the biggest shares, queue waits listed on their own. */
+function CriticalSummary({ layout, path, onSelect }: { layout: WaterfallLayout; path: ReturnType<typeof criticalPath>; onSelect: (id: string) => void }) {
+  const byId = new Map(layout.rows.map((r) => [r.span.id, r]));
+  const parts = path.segments
+    .flatMap((s) => [
+      { id: s.spanId, ms: s.selfMs, queue: false },
+      { id: s.spanId, ms: s.queueMs, queue: true },
+    ])
+    .filter((p) => p.ms > 0)
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, 4);
+  return (
+    <div className="small wf-critical" role="status">
+      <strong>Critical path, {formatDuration(path.wallMs)}:</strong>{' '}
+      {parts.map((p, i) => {
+        const row = byId.get(p.id);
+        const name = row ? spanLabel(row.span) : p.id;
+        return (
+          <span key={`${p.id}${p.queue}`}>
+            {i > 0 && ' · '}
+            <button className="link" onClick={() => onSelect(p.id)}>
+              {name}
+            </button>{' '}
+            {p.queue ? `waited ${formatDuration(p.ms)}${row?.span.kind === 'flowRun' ? ' to start' : ' in the queue'}` : formatDuration(p.ms)}
+            <span className="muted"> ({Math.round((p.ms / Math.max(path.wallMs, 1)) * 100)} %)</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Waterfall({ view, selected, onSelect }: { view: TimelineData; selected: string | null; onSelect: (id: string) => void }) {
   const { layout } = view;
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [zoom, setZoom] = useState<[number, number] | null>(null);
+  const [depthLimit, setDepthLimit] = useState<number | null>(null);
+  const [links, setLinks] = useState<LinkFilter>('all');
+  const [showCritical, setShowCritical] = useState(false);
+  const critical = useMemo(() => criticalPath(layout), [layout]);
+  const onPath = useMemo(() => new Set(critical.spanIds), [critical]);
+  const maxDepth = layout.rows.reduce((m, r) => Math.max(m, r.span.depth ?? 0), 0);
 
-  const visible = useMemo(() => {
+  const { visible, filteredOut } = useMemo(() => {
     const byId = new Map(layout.rows.map((r) => [r.span.id, r]));
+    const min = LINK_MIN[links];
+    const weak = (r: WaterfallRow) => r.parentId !== null && r.linkConfidence < min;
     const hidden = (r: WaterfallRow): boolean => {
+      if (weak(r)) return true;
       let p = r.parentId;
       while (p) {
         if (collapsed.has(p)) return true;
-        p = byId.get(p)?.parentId ?? null;
+        const parent = byId.get(p);
+        if (parent && weak(parent)) return true;
+        p = parent?.parentId ?? null;
       }
       return false;
     };
-    return layout.rows.filter((r) => !hidden(r));
-  }, [layout, collapsed]);
+    const rows = layout.rows.filter((r) => !hidden(r));
+    // Rows hidden by the link filter (not by collapsing), for the note under the toolbar.
+    const byLinks = min > 0 ? layout.rows.filter((r) => {
+      for (let cur: WaterfallRow | undefined = r; cur; cur = cur.parentId ? byId.get(cur.parentId) : undefined) if (weak(cur)) return true;
+      return false;
+    }).length : 0;
+    return { visible: rows, filteredOut: byLinks };
+  }, [layout, collapsed, links]);
+
+  /** Collapses every row whose children run deeper than `depth` (Dataverse depth, not tree level). */
+  const collapseToDepth = (depth: number | null) => {
+    setDepthLimit(depth);
+    if (depth === null) {
+      setCollapsed(new Set());
+      return;
+    }
+    const byId = new Map(layout.rows.map((r) => [r.span.id, r]));
+    setCollapsed(new Set(layout.rows.filter((r) => r.childIds.some((id) => (byId.get(id)?.span.depth ?? 0) > depth)).map((r) => r.span.id)));
+  };
 
   const full: [number, number] = [layout.start, Math.max(layout.end, layout.start + 1)];
   const [d0, d1] = zoom ?? full;
@@ -138,6 +260,7 @@ export function Waterfall({ view, selected, onSelect }: { view: TimelineData; se
   const hasAsync = layout.rows.some((r) => r.span.lane !== 'sync' && r.span.lane !== 'audit');
   const kinds = new Set(layout.rows.map((r) => barClass(r.span)));
   const hasInferred = layout.rows.some((r) => r.linkConfidence < 1);
+  const dim = showCritical && critical.spanIds.length > 0;
   const toggle = (id: string) =>
     setCollapsed((c) => {
       const next = new Set(c);
@@ -149,12 +272,55 @@ export function Waterfall({ view, selected, onSelect }: { view: TimelineData; se
   return (
     <div className="card waterfall">
       <div className="row" style={{ padding: '6px 8px', borderBottom: '1px solid var(--colorNeutralStroke2)' }}>
-        <Button size="small" appearance="subtle" onClick={() => setCollapsed(new Set())}>
+        <Button size="small" appearance="subtle" onClick={() => collapseToDepth(null)}>
           Expand all
         </Button>
-        <Button size="small" appearance="subtle" onClick={() => setCollapsed(new Set(layout.rows.filter((r) => r.level >= 1 && r.childIds.length).map((r) => r.span.id)))}>
-          Collapse nested
-        </Button>
+        {maxDepth > 1 && (
+          <Menu checkedValues={{ depth: [depthLimit === null ? 'all' : String(depthLimit)] }} onCheckedValueChange={(_, d) => collapseToDepth(d.checkedItems[0] === 'all' ? null : Number(d.checkedItems[0]))}>
+            <MenuTrigger disableButtonEnhancement>
+              <Button size="small" appearance="subtle" icon={<ChevronDownRegular />} iconPosition="after">
+                {depthLimit === null ? 'All depths' : `Down to depth ${depthLimit}`}
+              </Button>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                <MenuItemRadio name="depth" value="all">
+                  All depths
+                </MenuItemRadio>
+                {Array.from({ length: maxDepth - 1 }, (_, i) => i + 1).map((d) => (
+                  <MenuItemRadio key={d} name="depth" value={String(d)}>
+                    Collapse below depth {d}
+                  </MenuItemRadio>
+                ))}
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+        )}
+        {hasInferred && (
+          <Menu checkedValues={{ links: [links] }} onCheckedValueChange={(_, d) => setLinks(d.checkedItems[0] as LinkFilter)}>
+            <MenuTrigger disableButtonEnhancement>
+              <Button size="small" appearance="subtle" icon={<ChevronDownRegular />} iconPosition="after">
+                {LINK_LABELS[links]}
+              </Button>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                {(Object.keys(LINK_LABELS) as LinkFilter[]).map((k) => (
+                  <MenuItemRadio key={k} name="links" value={k}>
+                    {k === 'all' ? 'Show all links' : k === 'likely' ? 'Hide inferred links under 50 %' : 'Hide every inferred link'}
+                  </MenuItemRadio>
+                ))}
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+        )}
+        {critical.spanIds.length > 1 && (
+          <Tooltip content="The chain of spans that decided when this finished: at each point, whatever finished last before it. Everything else is dimmed." relationship="description">
+            <ToggleButton size="small" appearance="subtle" icon={<FlashRegular />} checked={showCritical} onClick={() => setShowCritical((v) => !v)}>
+              Critical path
+            </ToggleButton>
+          </Tooltip>
+        )}
         <div className="grow" />
         {syncRange && hasAsync && (
           <Tooltip content="Zoom to the synchronous part: what the user waited for when saving" relationship="description">
@@ -173,6 +339,16 @@ export function Waterfall({ view, selected, onSelect }: { view: TimelineData; se
           <Button size="small" appearance="subtle" icon={<ZoomFitRegular />} disabled={!zoom} onClick={() => setZoom(null)} />
         </Tooltip>
       </div>
+      {dim && <CriticalSummary layout={layout} path={critical} onSelect={onSelect} />}
+      {layout.rows.length > 3 && <Minimap layout={layout} zoom={zoom} onZoom={setZoom} />}
+      {filteredOut > 0 && (
+        <div className="small muted" style={{ padding: '2px 8px' }}>
+          {filteredOut} {filteredOut === 1 ? 'row is' : 'rows are'} hidden by the link filter.{' '}
+          <button className="link" onClick={() => setLinks('all')}>
+            Show all
+          </button>
+        </div>
+      )}
       <div className="wf-scroll">
         <div className="wf-grid" role="treegrid" aria-label="Execution timeline">
           <div className="wf-axis labels">Span</div>
@@ -204,7 +380,14 @@ export function Waterfall({ view, selected, onSelect }: { view: TimelineData; se
               .join('\n');
             return (
               <div key={span.id} style={{ display: 'contents' }} onClick={() => onSelect(span.id)} onDoubleClick={() => setZoom([r.span.queuedAt ?? r.displayStart, Math.max(r.displayEnd, r.displayStart + 1)])}>
-                <div className={`wf-label${isSel ? ' selected' : ''}`} style={{ paddingLeft: 6 + r.level * 16 }} role="row" aria-level={r.level + 1} aria-selected={isSel}>
+                <div
+                  className={`wf-label${isSel ? ' selected' : ''}${dim && !onPath.has(span.id) ? ' dimmed' : ''}`}
+                  style={{ paddingLeft: 6 + r.level * 16 }}
+                  role="row"
+                  aria-level={r.level + 1}
+                  aria-selected={isSel}
+                  aria-description={dim && onPath.has(span.id) ? 'on the critical path' : undefined}
+                >
                   {r.childIds.length ? (
                     <button
                       className="wf-toggle"
@@ -233,7 +416,7 @@ export function Waterfall({ view, selected, onSelect }: { view: TimelineData; se
                   {span.status === 'waiting' && <Badge size="small" appearance="tint">waiting</Badge>}
                   {span.status === 'running' && <Badge size="small" appearance="tint" color="brand">running</Badge>}
                 </div>
-                <div className={`wf-lane${isSel ? ' selected' : ''}`} title={tip}>
+                <div className={`wf-lane${isSel ? ' selected' : ''}${dim ? (onPath.has(span.id) ? ' critical' : ' dimmed') : ''}`} title={tip}>
                   {ticks.map((t) => (
                     <span key={t} className="wf-gridline" style={{ left: `${pct(layout.start + t)}%` }} />
                   ))}

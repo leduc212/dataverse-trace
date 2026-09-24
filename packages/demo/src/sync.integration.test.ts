@@ -1,5 +1,5 @@
 // The real SyncEngine and capability probe against the demo environment.
-import type { AsyncOperationRecord, FlowEventRecord, FlowRunRecord, ProcessDefinition, StepRegistration, TraceBlob, TraceLogRecord } from '@dvt/core';
+import { newSnapshots, snapshotKey, type AsyncOperationRecord, type FlowEventRecord, type FlowRunRecord, type PluginTypeStatRecord, type PluginTypeStatSnapshot, type ProcessDefinition, type StepRegistration, type TraceBlob, type TraceLogRecord } from '@dvt/core';
 import { DAY_MS, SyncEngine, fetchAudits, fetchEntityMetadata, fetchOrganization, fetchRecord, fetchStepsForTable, probeCapabilities, searchRecords, setTraceSetting, type SourceName, type SourceState, type SyncStore } from '@dvt/dataverse';
 import { describe, expect, it } from 'vitest';
 import { generateDemo, simulateSave } from './generator.ts';
@@ -17,6 +17,7 @@ class MemoryStore implements SyncStore {
   flowRuns = new Map<string, FlowRunRecord>();
   flowEvents = new Map<string, FlowEventRecord>();
   processes: ProcessDefinition[] = [];
+  pluginStats = new Map<string, PluginTypeStatSnapshot>();
   writes = 0;
   async getSourceState(source: SourceName) {
     const s = this.states.get(source);
@@ -47,6 +48,11 @@ class MemoryStore implements SyncStore {
   async replaceProcesses(rows: ProcessDefinition[]) {
     this.processes = rows;
   }
+  async putPluginStats(rows: PluginTypeStatRecord[], takenAt: number) {
+    const fresh = newSnapshots(rows, new Set(this.pluginStats.keys()), takenAt);
+    fresh.forEach((r) => this.pluginStats.set(snapshotKey(r), r));
+    return fresh.length;
+  }
   async referencedStepIds() {
     return new Set([...this.traceLogs.values()].map((l) => l.stepId).concat([...this.jobs.values()].map((j) => j.stepId)).filter((x): x is string => Boolean(x)));
   }
@@ -63,8 +69,10 @@ describe('SyncEngine against the demo environment', () => {
     const store = new MemoryStore();
     const report = await engine(store, new MockTransport(data)).syncAll();
     expect(report.results.map((r) => [r.source, r.phase])).toEqual(
-      ['traceLogs', 'asyncOps', 'steps', 'flowRuns', 'flowEvents', 'processes', 'traceBlobs'].map((s) => [s, 'done']),
+      ['traceLogs', 'asyncOps', 'steps', 'flowRuns', 'flowEvents', 'processes', 'pluginStats', 'traceBlobs'].map((s) => [s, 'done']),
     );
+    expect(store.pluginStats.size).toBe(data.pluginTypeStatistics.length);
+    expect([...store.pluginStats.values()].find((s) => s.typeName === 'Harbor.Plugins.ContactAudit')).toMatchObject({ failureCount: 0, failurePercent: 0 });
     expect(store.traceLogs.size).toBe(data.traceLogs.length);
     expect(store.blobs.size).toBe(data.traceLogs.length);
     expect(store.jobs.size).toBe(data.asyncOperations.length);
@@ -271,5 +279,23 @@ describe('simulated saves (watch mode in the demo)', () => {
     clock = NOW + 120_000;
     expect(await count()).toBe(before + 1);
     expect(transport.pendingCount).toBe(0);
+  });
+});
+
+describe('plug-in type statistics', () => {
+  it('are refreshed at most every 15 minutes, and a snapshot is kept only when Dataverse updates a row', async () => {
+    const store = new MemoryStore();
+    const transport = new MockTransport(data);
+    expect(await engine(store, transport).syncPluginStats()).toMatchObject({ phase: 'done', fetched: data.pluginTypeStatistics.length });
+    // Too soon: skipped without a request.
+    expect(await engine(store, transport, NOW + 5 * 60_000).syncPluginStats()).toMatchObject({ phase: 'done', fetched: 0 });
+    // Later, but Dataverse hasn't updated the counters: nothing new is stored.
+    expect(await engine(store, transport, NOW + 20 * 60_000).syncPluginStats()).toMatchObject({ phase: 'done', fetched: 0 });
+    expect(store.pluginStats.size).toBe(data.pluginTypeStatistics.length);
+  });
+
+  it('are skipped, not failed, without read access', async () => {
+    const report = await new SyncEngine({ transport: new MockTransport(data), store: new MemoryStore(), now: () => NOW, canRead: (s) => s !== 'pluginStats' }).syncPluginStats();
+    expect(report).toMatchObject({ phase: 'skipped' });
   });
 });

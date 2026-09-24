@@ -111,6 +111,12 @@ async function record(page: Page) {
   await page.goto(`http://localhost:${PORT}/#/dashboard?r=7d`);
   await pause(1500);
   await shot(page, 3000);
+
+  // Cascades: the update loop between three steps.
+  await page.goto(`http://localhost:${PORT}/#/graph`);
+  await page.locator('.cascade').waitFor();
+  await pause(600);
+  await shot(page, 3000);
 }
 
 async function main() {

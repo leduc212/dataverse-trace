@@ -114,6 +114,38 @@ export interface OrganizationSettings {
 
 export const TRACE_SETTING_LABELS = { 0: 'Off', 1: 'Exceptions', 2: 'All' } as const;
 
+/**
+ * One `plugintypestatistic` row: the platform's own counters for a plug-in type. They're kept even
+ * when trace logging is off. The window they cover isn't documented (spike S8).
+ */
+export interface PluginTypeStatRecord {
+  id: string;
+  pluginTypeId: string | null;
+  /** The plug-in type's name, usually its full .NET type name. */
+  typeName: string | null;
+  executeCount: number;
+  failureCount: number;
+  failurePercent: number | null;
+  crashCount: number;
+  crashPercent: number | null;
+  crashContributionPercent: number | null;
+  averageExecuteMs: number | null;
+  terminateCpuPercent: number | null;
+  terminateMemoryPercent: number | null;
+  terminateHandlesPercent: number | null;
+  terminateOtherPercent: number | null;
+  /** When Dataverse last updated the counters. */
+  modifiedOn: EpochMs;
+}
+
+/** A stored copy of a statistic row, kept each time Dataverse updates it. */
+export interface PluginTypeStatSnapshot extends PluginTypeStatRecord {
+  /** `${id}@${modifiedOn}`: one snapshot per update. */
+  key: string;
+  /** When the app first read this version. */
+  takenAt: EpochMs;
+}
+
 /** One `flowrun` row (cloud flow run history in Dataverse). */
 export interface FlowRunRecord {
   id: string;

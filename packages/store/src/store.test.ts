@@ -1,7 +1,8 @@
 import 'fake-indexeddb/auto';
-import type { AsyncOperationRecord, TraceLogRecord } from '@dvt/core';
+import { buildRollups, type AsyncOperationRecord, type TraceLogRecord } from '@dvt/core';
+import { Dexie } from 'dexie';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LocalStore } from './store.ts';
+import { databaseName, LocalStore, RAW_FROM } from './store.ts';
 
 const T0 = Date.UTC(2026, 8, 24, 8, 0, 0);
 let n = 0;
@@ -124,12 +125,90 @@ describe('LocalStore', () => {
     expect((await b.allTraceLogs()).length).toBe(0);
   });
 
-  it('prunes old rows and their text, and summarises storage', async () => {
+  it('applies retention: raw rows, then trace text, then rollups, and remembers where raw rows start', async () => {
     const store = open();
-    await store.putTraceLogs([log({ id: 'old', createdOn: T0 - 1000, start: T0 - 1000 }), log({ id: 'new', createdOn: T0 + 1000, start: T0 + 1000 })]);
-    await store.putTraceBlobs([{ id: 'old', messageBlock: 'x' }]);
-    await store.putAsyncOperations([job({ modifiedOn: T0 - 1 }), job({ modifiedOn: T0 + 1 })]);
-    expect(await store.prune(T0)).toEqual({ traceLogs: 1, asyncOps: 1, flowRuns: 0 });
-    expect(await store.summary()).toEqual({ traceLogs: 1, traceBlobs: 0, asyncOps: 1, steps: 0, flowRuns: 0, processes: 0, oldest: T0 + 1000, newest: T0 + 1000 });
+    const DAY = 86_400_000;
+    const now = T0 + 100 * DAY;
+    const retention = { rawMs: 30 * DAY, blobsMs: 14 * DAY, rollupsMs: 90 * DAY };
+    await store.putTraceLogs([
+      log({ id: 'ancient', createdOn: T0, start: T0 }),
+      log({ id: 'old', createdOn: now - 40 * DAY, start: now - 40 * DAY }),
+      log({ id: 'mid', createdOn: now - 20 * DAY, start: now - 20 * DAY }),
+      log({ id: 'new', createdOn: now - DAY, start: now - DAY }),
+    ]);
+    await store.putTraceBlobs([
+      { id: 'old', messageBlock: 'x' },
+      { id: 'mid', messageBlock: 'y' },
+      { id: 'new', messageBlock: 'z' },
+    ]);
+    await store.putAsyncOperations([job({ modifiedOn: now - 31 * DAY }), job({ modifiedOn: now })]);
+    expect(await store.getMeta(RAW_FROM)).toBeUndefined();
+    expect(await store.prune(now, retention)).toEqual({ traceLogs: 2, traceBlobs: 2, asyncOps: 1, flowRuns: 0, rollups: 1 });
+    expect((await store.allTraceLogs()).map((l) => l.id).sort()).toEqual(['mid', 'new']);
+    expect(await store.blob('mid')).toBeUndefined();
+    expect(await store.blob('new')).toBeDefined();
+    // The 40-day-old hour keeps its rollup after its raw row is gone; the 100-day-old one doesn't.
+    expect((await store.rollupsBetween(0, Infinity)).map((r) => r.hour)).toEqual([now - 40 * DAY, now - 20 * DAY, now - DAY]);
+    expect(await store.getMeta(RAW_FROM)).toBe(now - 30 * DAY);
+    expect(await store.summary()).toEqual({ traceLogs: 2, traceBlobs: 1, asyncOps: 1, steps: 0, flowRuns: 0, processes: 0, rollups: 3, oldest: now - 20 * DAY, newest: now - DAY });
+    expect(await store.prune(now, retention)).toEqual({ traceLogs: 0, traceBlobs: 0, asyncOps: 0, flowRuns: 0, rollups: 0 });
+  });
+});
+
+describe('rollups', () => {
+  const H = 3_600_000;
+
+  it('rebuilds the hours touched by each write, including re-read rows that moved', async () => {
+    const store = open();
+    await store.putTraceLogs([log({ id: 'a', start: T0 + 10, durationMs: 100 }), log({ id: 'b', start: T0 + H + 10, exception: 'boom' })]);
+    let rollups = await store.rollupsBetween(T0, T0 + 2 * H);
+    expect(rollups.map((r) => [r.hour, r.count, r.errors])).toEqual([
+      [T0, 1, 0],
+      [T0 + H, 1, 1],
+    ]);
+    // Row "a" re-read with a later start: its old hour empties, the new hour counts it.
+    await store.putTraceLogs([log({ id: 'a', start: T0 + H + 20, durationMs: 100 })]);
+    rollups = await store.rollupsBetween(T0, T0 + 2 * H);
+    expect(rollups.map((r) => [r.hour, r.count])).toEqual([[T0 + H, 2]]);
+    expect(await store.oldestRollupHour()).toBe(T0 + H);
+  });
+
+  it('counts truncated trace text once the text arrives', async () => {
+    const store = open();
+    await store.putTraceLogs([log({ id: 'a' }), log({ id: 'b' })]);
+    await store.putTraceBlobs([
+      { id: 'a', messageBlock: 'x'.repeat(10_000) },
+      { id: 'b', messageBlock: 'short' },
+    ]);
+    const [r] = await store.rollupsBetween(0, Infinity);
+    expect(r).toMatchObject({ count: 2, textKnown: 2, truncated: 1 });
+  });
+
+  it('stores imported rollups as they are', async () => {
+    const store = open();
+    const [r] = buildRollups([log({ start: T0 - 50 * H })]);
+    await store.putRollups([r!]);
+    expect(await store.rollupsBetween(T0 - 100 * H, T0)).toEqual([r]);
+    expect(await store.rollupsBetween(T0, T0 + H)).toEqual([]);
+  });
+
+  it('builds rollups for rows stored before the upgrade', async () => {
+    const name = `env-${++n}`;
+    const legacy = new Dexie(databaseName(name));
+    legacy.version(2).stores({
+      traceLogs: 'id, createdOn, start, correlationId, stepId',
+      traceBlobs: 'id',
+      asyncOps: 'id, correlationId, modifiedOn, stepId',
+      steps: 'id',
+      sourceState: 'source',
+      meta: 'key',
+      flowRuns: 'id, start, modifiedOn, workflowId, runId, parentRunId',
+      flowEvents: 'id, createdOn',
+      processes: 'id',
+    });
+    await legacy.table('traceLogs').bulkPut([log({ id: 'x' }), log({ id: 'y', start: T0 + H })]);
+    legacy.close();
+    const store = open(name);
+    expect((await store.rollupsBetween(0, Infinity)).map((r) => r.count)).toEqual([1, 1]);
   });
 });

@@ -123,3 +123,87 @@ export function layoutWaterfall(trace: Trace): WaterfallLayout {
   const end = Math.max(...rows.map((r) => r.displayEnd));
   return { rows, start, end };
 }
+
+export interface CriticalSegment {
+  spanId: string;
+  /** Time on the path spent in this span itself (not in the children that are also on the path). */
+  selfMs: number;
+  /** Time on the path spent waiting before it started (a system job in the queue, a flow's delay). */
+  queueMs: number;
+}
+
+export interface CriticalPath {
+  /** Span ids on the path, from the root down. */
+  spanIds: string[];
+  /** Where the path's time went, by span, largest first. Adds up to {@link wallMs}. */
+  segments: CriticalSegment[];
+  /** Wall time the path explains: from the start of its root to the end of the whole trace. */
+  wallMs: number;
+}
+
+/**
+ * The critical path: the chain of spans that decided when the trace finished. Starting from the
+ * root whose work ends last, it walks back in time, at each level taking the child that finished
+ * last before the current point, then the one that finished before that child was started or
+ * queued, and so on (the approach tracing tools such as Jaeger use). Save markers have no duration
+ * and are skipped. Each span's share is its own time on the path, and queue time is kept apart,
+ * so "7 s waiting for the async service" doesn't read as a slow plug-in.
+ */
+export function criticalPath(layout: WaterfallLayout): CriticalPath {
+  const byId = new Map(layout.rows.map((r) => [r.span.id, r]));
+  const subtreeEnd = new Map<string, number>();
+  const endOf = (r: WaterfallRow): number => {
+    const known = subtreeEnd.get(r.span.id);
+    if (known !== undefined) return known;
+    let end = r.displayEnd;
+    for (const id of r.childIds) end = Math.max(end, endOf(byId.get(id)!));
+    subtreeEnd.set(r.span.id, end);
+    return end;
+  };
+  const roots = layout.rows.filter((r) => r.parentId === null && r.span.kind !== 'audit');
+  if (roots.length === 0) return { spanIds: [], segments: [], wallMs: 0 };
+  const root = roots.reduce((best, r) => (endOf(r) > endOf(best) ? r : best));
+  const spanIds: string[] = [];
+  const segments = new Map<string, CriticalSegment>();
+  const segment = (id: string) => {
+    let seg = segments.get(id);
+    if (!seg) segments.set(id, (seg = { spanId: id, selfMs: 0, queueMs: 0 }));
+    return seg;
+  };
+  /** Walks `row` backwards from `until`; returns when the row (or its queue wait) began. */
+  const walk = (row: WaterfallRow, until: number): number => {
+    spanIds.push(row.span.id);
+    const seg = segment(row.span.id);
+    let cursor = Math.min(until, endOf(row));
+    const kids = row.childIds.map((id) => byId.get(id)!).filter((k) => k.span.kind !== 'audit');
+    const used = new Set<string>();
+    for (;;) {
+      let next: WaterfallRow | undefined;
+      let nextEnd = -Infinity;
+      for (const k of kids) {
+        if (used.has(k.span.id) || k.displayStart >= cursor) continue;
+        const end = Math.min(endOf(k), cursor);
+        if (end > nextEnd || (end === nextEnd && next && k.displayStart < next.displayStart)) {
+          next = k;
+          nextEnd = end;
+        }
+      }
+      if (!next || nextEnd <= row.displayStart) break;
+      used.add(next.span.id);
+      seg.selfMs += cursor - nextEnd;
+      cursor = walk(next, cursor);
+      if (cursor <= row.displayStart) break;
+    }
+    seg.selfMs += Math.max(0, cursor - row.displayStart);
+    // A queued span waited before it started: that wait is on the path too.
+    const queuedAt = row.span.queuedAt;
+    if (queuedAt !== undefined && queuedAt < row.displayStart && row !== root) {
+      seg.queueMs += row.displayStart - queuedAt;
+      return queuedAt;
+    }
+    return Math.min(cursor, row.displayStart);
+  };
+  walk(root, endOf(root));
+  const list = [...segments.values()].filter((s) => s.selfMs + s.queueMs > 0).sort((a, b) => b.selfMs + b.queueMs - (a.selfMs + a.queueMs) || (a.spanId < b.spanId ? -1 : 1));
+  return { spanIds, segments: list, wallMs: endOf(root) - root.displayStart };
+}

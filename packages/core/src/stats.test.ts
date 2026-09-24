@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { formatDuration, formatPercent } from './format.ts';
-import { bucketOf, createHistogram, histogramQuantile, merge, quantileSorted, record } from './histogram.ts';
+import { bucketOf, createHistogram, histogramQuantile, histogramQuantileInterpolated, merge, quantileSorted, record } from './histogram.ts';
 import { computeKpis, computeStepStats, heatmapByDayHour, timeSeries } from './stats.ts';
 import { T0, traceLog } from './test-builders.ts';
 
@@ -70,6 +70,26 @@ describe('histogram', () => {
         expect(approx).toBeLessThanOrEqual(exact * 1.25 + 1e-9);
       }),
     );
+  });
+
+  it('interpolated quantiles stay in the bucket of the exact value and grow with q', () => {
+    fc.assert(
+      fc.property(fc.array(fc.integer({ min: 0, max: 600_000 }), { minLength: 1, maxLength: 300 }), (values) => {
+        const h = createHistogram();
+        values.forEach((v) => record(h, v));
+        const sorted = [...values].sort((a, b) => a - b);
+        let previous = -1;
+        for (const q of [0.1, 0.5, 0.9, 0.95, 0.99]) {
+          const exact = quantileSorted(sorted, q)!;
+          const approx = histogramQuantileInterpolated(h, q)!;
+          expect(approx).toBeGreaterThanOrEqual(exact < 1 ? 0 : exact / 1.25 - 1e-9);
+          expect(approx).toBeLessThanOrEqual(Math.max(1, exact * 1.25) + 1e-9);
+          expect(approx).toBeGreaterThanOrEqual(previous);
+          previous = approx;
+        }
+      }),
+    );
+    expect(histogramQuantileInterpolated(createHistogram(), 0.5)).toBeNull();
   });
 
   it('merging equals recording everything into one histogram', () => {

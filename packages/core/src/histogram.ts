@@ -42,6 +42,29 @@ export function histogramQuantile(h: Histogram, q: number): number | null {
   return bucketUpper(BUCKETS - 1);
 }
 
+/**
+ * Estimated quantile (0–1), interpolated geometrically inside the bucket that holds it. Still within
+ * the bucket's bounds, but it moves smoothly as counts shift instead of jumping 25 % at a time, so
+ * two periods can be compared.
+ */
+export function histogramQuantileInterpolated(h: Histogram, q: number): number | null {
+  const total = count(h);
+  if (total === 0) return null;
+  const target = Math.max(1, Math.ceil(q * total));
+  let seen = 0;
+  for (let i = 0; i < BUCKETS; i++) {
+    const n = h[i]!;
+    if (n > 0 && seen + n >= target) {
+      const f = (target - seen) / n;
+      if (i === 0) return f;
+      const lower = bucketUpper(i - 1);
+      return lower * (bucketUpper(i) / lower) ** f;
+    }
+    seen += n;
+  }
+  return bucketUpper(BUCKETS - 1);
+}
+
 /** Exact quantile (nearest-rank) of an ascending-sorted array. */
 export function quantileSorted(sorted: readonly number[], q: number): number | null {
   if (sorted.length === 0) return null;

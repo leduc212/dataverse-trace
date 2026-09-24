@@ -59,7 +59,7 @@ Rule: `core` has **no** dependency on React, Dexie or fetch. That's what makes t
 | `flowevents` | `$filter=eventtype eq 'FlowRunIngestion' and createdon ge {wm}` | Incremental. Feeds the gap signals. |
 | `audits` | `$filter=_objectid_value eq {id}` or a time window plus `objecttypecode`; details through `RetrieveAuditDetails` | **On demand only** (record timeline, watch mode) because audit volume is large. P2: optional bulk sync for tables the user picks. |
 | Registrations: `sdkmessageprocessingsteps` (+ `$expand` message, filter, plugin type, images), `workflows` (category 0/2/5; `clientdata` for category 5), `callbackregistrations`, `organization` settings | Full snapshot | Refreshed on connect and then hourly, or on demand. A snapshot is versioned only when `modifiedon` changes, so a trace can be explained against the registration as it was **when the trace ran** (P2). |
-| `plugintypestatistics` | Full snapshot | Stored on each sync (it's small) to build trends. |
+| `plugintypestatistics` | Full snapshot, at most every 15 min | A version is stored each time Dataverse updates a row (`modifiedon`), to build trends and to answer S8. |
 
 ## 4. Local data model (IndexedDB via Dexie)
 
@@ -77,8 +77,8 @@ flowRuns          id, envId, workflowId, parentRunId, start, end, status, trigge
 audits            id, envId, record{table,id}, operation, action, userId, transactionId, createdOn,
                   changedColumns[]
 registrations     [envId+kind+id], version, validFrom, data (step | image | workflow | callback)
-statSnapshots     [envId+pluginTypeId+takenAt], counts…
-rollupsHourly     [envId+stepKey+hour], count, errors, sumMs, maxMs, hist: Uint32Array(64)
+rollupsHourly     [stepKey@hour], count, errors, sumMs, maxMs, hist (sparse), ctor count/sum/hist, maxDepth, textKnown, truncated
+statSnapshots     [statId@modifiedOn], counts… of one plugintypestatistic version, takenAt (store table: pluginStats)
 spans             derived, can be rebuilt; cache of assembled traces keyed by traceKey
 sessions          id, envId, kind(watch|capture|imported), createdAt, file(.dvtrace JSON)
 savedViews, settings, pendingRestore(trace-setting marker)

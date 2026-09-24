@@ -1,6 +1,6 @@
 {
   "name": "@dvt/web",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Dataverse Trace web app. Runs as Dataverse web resources (real data) or on any static host (demo).",
   "type": "module",

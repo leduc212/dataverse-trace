@@ -44,6 +44,7 @@ const SOURCE_LABELS: Record<string, string> = {
   flowRuns: 'Cloud flow runs',
   flowEvents: 'Flow run gaps (flow events)',
   processes: 'Workflows, business rules and flows',
+  pluginStats: 'Platform statistics',
 };
 
 export function StatusPage() {
@@ -93,6 +94,9 @@ export function StatusPage() {
           <Check ok={caps ? caps.canReadAudit && caps.settings.isAuditEnabled !== false : null} title="Audit history">
             Finds each save of a record, who made it and which columns changed. Needs auditing on for the table.
           </Check>
+          <Check ok={caps?.canReadPluginStats ?? null} title="Platform statistics">
+            Dataverse's own counters per plug-in type (runs, failures, average time). They keep counting with trace logging off.
+          </Check>
           <Check ok={setting === 2 ? true : setting === null || setting === undefined ? null : false} title="Trace logging set to All">
             {setting === 1 ? 'Only failures are logged (Exceptions).' : setting === 0 ? 'Nothing is being logged (Off).' : 'Every execution is logged.'}
           </Check>
@@ -115,7 +119,7 @@ export function StatusPage() {
               </tr>
             </thead>
             <tbody>
-              {(['traceLogs', 'asyncOps', 'steps', 'flowRuns', 'flowEvents', 'processes', 'traceBlobs'] as const).map((source) => {
+              {(['traceLogs', 'asyncOps', 'steps', 'flowRuns', 'flowEvents', 'processes', 'pluginStats', 'traceBlobs'] as const).map((source) => {
                 const s = status.sources.find((x) => x.source === source);
                 const live = status.progress.find((p) => p.source === source);
                 return (
@@ -148,10 +152,14 @@ export function StatusPage() {
               ['Steps', storage?.steps.toLocaleString('en-US')],
               ['Flow runs', storage?.flowRuns.toLocaleString('en-US')],
               ['Processes', storage?.processes.toLocaleString('en-US')],
+              ['Hourly summaries', storage?.rollups.toLocaleString('en-US')],
               ['Oldest execution', storage?.oldest ? formatShortDateTime(storage.oldest) : '–'],
               ['Newest execution', storage?.newest ? formatShortDateTime(storage.newest) : '–'],
             ]}
           />
+          <div className="small muted" style={{ marginTop: 8 }}>
+            Executions, system jobs and flow runs are kept for 30 days, trace text for 14 days, and hourly summaries (for the dashboard's longer ranges) for 400 days.
+          </div>
           {(status.sources.find((s) => s.source === 'traceLogs')?.gaps.length ?? 0) > 0 && (
             <div className="small muted" style={{ marginTop: 8 }}>
               Gaps: {status.sources.find((s) => s.source === 'traceLogs')!.gaps.map(([a, b]) => `${formatShortDateTime(a)} – ${formatShortDateTime(b)}`).join('; ')}. Dataverse deletes trace logs after about a day, so open the app at least once a day to keep history complete.

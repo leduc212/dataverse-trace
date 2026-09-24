@@ -4,6 +4,7 @@ import type {
   AuditRecord,
   FlowEventRecord,
   FlowRunRecord,
+  PluginTypeStatRecord,
   ProcessCategory,
   ProcessDefinition,
   AsyncOperationRecord,
@@ -199,6 +200,26 @@ export function mapFlowEvent(row: Raw): FlowEventRecord {
     name: str(row['name']),
     createdOn: required(time(row['createdon']), 'createdon', row),
     parentObjectId: str(row['_parentobjectid_value']),
+  };
+}
+
+export function mapPluginTypeStat(row: Raw): PluginTypeStatRecord {
+  return {
+    id: required(str(row['plugintypestatisticid']), 'plugintypestatisticid', row),
+    pluginTypeId: str(row['_plugintypeid_value']),
+    typeName: formatted(row, '_plugintypeid_value') ?? null,
+    executeCount: num(row['executecount']) ?? 0,
+    failureCount: num(row['failurecount']) ?? 0,
+    failurePercent: num(row['failurepercent']),
+    crashCount: num(row['crashcount']) ?? 0,
+    crashPercent: num(row['crashpercent']),
+    crashContributionPercent: num(row['crashcontributionpercent']),
+    averageExecuteMs: num(row['averageexecutetimeinmilliseconds']),
+    terminateCpuPercent: num(row['terminatecpucontributionpercent']),
+    terminateMemoryPercent: num(row['terminatememorycontributionpercent']),
+    terminateHandlesPercent: num(row['terminatehandlescontributionpercent']),
+    terminateOtherPercent: num(row['terminateothercontributionpercent']),
+    modifiedOn: required(time(row['modifiedon']), 'modifiedon', row),
   };
 }
 

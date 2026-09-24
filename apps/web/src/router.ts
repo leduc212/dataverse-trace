@@ -2,6 +2,7 @@
 //   #/explorer?q=…&r=24h&v=operations&s=newest
 //   #/trace/<correlationId>
 //   #/dashboard?r=7d
+//   #/graph?r=7d&t=<table>&n=<step key>
 //   #/status
 //   #/record/<table>/<id>?save=<saveId>   (#/record alone: pick a record)
 //   #/expected?t=<table>&c=update&cols=a,b
@@ -9,7 +10,7 @@
 //   #/session                              (open a .dvtrace.json file)
 import { useSyncExternalStore } from 'react';
 
-export type Page = 'explorer' | 'trace' | 'dashboard' | 'status' | 'record' | 'expected' | 'watch' | 'session';
+export type Page = 'explorer' | 'trace' | 'dashboard' | 'graph' | 'status' | 'record' | 'expected' | 'watch' | 'session';
 
 export interface Route {
   page: Page;
@@ -33,6 +34,7 @@ export function parseHash(hash: string): Route {
     case 'watch':
     case 'session':
     case 'dashboard':
+    case 'graph':
     case 'status':
     case 'explorer':
       return { page, id: null, params };

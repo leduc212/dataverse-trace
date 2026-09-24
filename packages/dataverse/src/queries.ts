@@ -170,6 +170,12 @@ export function recordSearchQuery(entitySet: string, primaryId: string, primaryN
   return `${entitySet}?$select=${primaryId},${primaryName}&$filter=contains(${primaryName},'${encodeURIComponent(literal)}')&$orderby=${primaryName} asc&$top=${top}`;
 }
 
+/** The platform's own counters per plug-in type (small: one row per type). */
+export const pluginTypeStatisticsQuery = (): string =>
+  'plugintypestatistics?$select=plugintypestatisticid,_plugintypeid_value,executecount,failurecount,failurepercent,crashcount,crashpercent,crashcontributionpercent,' +
+  'averageexecutetimeinmilliseconds,terminatecpucontributionpercent,terminatememorycontributionpercent,terminatehandlescontributionpercent,terminateothercontributionpercent,modifiedon' +
+  '&$orderby=plugintypestatisticid asc';
+
 /** Live Dataverse trigger subscriptions of cloud flows (to check that a flow's trigger is really registered). */
 export const callbackRegistrationsQuery = (): string =>
   'callbackregistrations?$select=callbackregistrationid,name,entityname,message,filteringattributes,filterexpression,scope&$orderby=callbackregistrationid asc';

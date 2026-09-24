@@ -38,6 +38,7 @@ export class MockTransport implements Transport {
       flowevents: data.flowEvents,
       workflows: data.workflows,
       callbackregistrations: data.callbackRegistrations,
+      plugintypestatistics: data.pluginTypeStatistics,
       audits: data.audits,
     };
   }

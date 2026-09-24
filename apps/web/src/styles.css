@@ -1044,3 +1044,147 @@ table.data.expected tr.dim td {
 .caveats li + li {
   margin-top: 2px;
 }
+.delta {
+  white-space: nowrap;
+}
+.finding .evidence {
+  margin: 4px 0;
+  padding-left: 16px;
+  color: var(--colorNeutralForeground2);
+}
+.thresholds fieldset {
+  border: none;
+  border-top: 1px solid var(--colorNeutralStroke3);
+  margin: 0 0 8px;
+  padding: 8px 0 0;
+  display: grid;
+  gap: 8px;
+}
+.thresholds legend {
+  font-weight: 600;
+  padding: 0 4px 0 0;
+}
+
+/* ── cascades ───────────────────────────────────────────────────────────── */
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .graph-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.graph-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 220px);
+}
+.cascade-node rect {
+  fill: var(--colorNeutralBackground1);
+  stroke: var(--colorNeutralStroke1);
+  stroke-width: 1;
+}
+.cascade-node {
+  cursor: pointer;
+  outline: none;
+}
+.cascade-node:hover rect,
+.cascade-node:focus-visible rect {
+  stroke: var(--colorBrandStroke1);
+  stroke-width: 2;
+}
+.cascade-node.selected rect {
+  stroke: var(--colorBrandStroke1);
+  stroke-width: 2.5;
+}
+.cascade-node.loop rect {
+  stroke: var(--viz-critical);
+  stroke-width: 2;
+}
+.cascade-node .name {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--colorNeutralForeground1);
+}
+.cascade-node .sub {
+  font-size: 11px;
+  fill: var(--colorNeutralForeground3);
+}
+.cascade-edge path {
+  stroke: var(--viz-axis);
+  stroke-width: 1.5;
+}
+.cascade-edge.loop path {
+  stroke: var(--viz-critical);
+}
+.cascade-edge text {
+  font-size: 11px;
+  fill: var(--colorNeutralForeground3);
+  paint-order: stroke;
+  stroke: var(--colorNeutralBackground1);
+  stroke-width: 3px;
+}
+.cascade-edge.faded {
+  opacity: 0.25;
+}
+.graph-side .cycle {
+  padding: 8px 0;
+  border-top: 1px solid var(--colorNeutralStroke3);
+}
+.graph-side .cycle:first-of-type {
+  border-top: none;
+}
+.graph-side ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+/* ── timeline: minimap and critical path ───────────────────────────────── */
+.wf-minimap {
+  position: relative;
+  height: 40px;
+  margin: 6px 8px 2px;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 4px;
+  background: var(--viz-surface);
+  cursor: crosshair;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+.wf-minimap-bar {
+  position: absolute;
+  opacity: 0.85;
+  border-radius: 1px;
+}
+.wf-minimap-window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 1.5px solid var(--colorBrandStroke1);
+  background: color-mix(in srgb, var(--colorBrandBackground) 12%, transparent);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.wf-minimap-drag {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--colorBrandBackground) 22%, transparent);
+  pointer-events: none;
+}
+.wf-lane.dimmed .wf-bar,
+.wf-lane.dimmed .wf-queue,
+.wf-lane.dimmed .wf-save,
+.wf-lane.dimmed .wf-bar-label,
+.wf-label.dimmed {
+  opacity: 0.3;
+}
+.wf-lane.critical .wf-bar {
+  box-shadow: 0 0 0 1.5px var(--colorNeutralForeground2);
+}
+.wf-critical {
+  padding: 4px 8px 0;
+}

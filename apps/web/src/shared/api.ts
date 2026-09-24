@@ -2,11 +2,15 @@
 // storage, filtering, correlation and statistics. Everything crossing it must be structured-cloneable.
 import type {
   AsyncOperationRecord,
+  CascadeGraph,
   ChangeKind,
   ExpectedItem,
   Heatmap,
+  Insight,
+  InsightThresholds,
   Kpis,
   OperationSummary,
+  PlatformSummary,
   RecordRef,
   RecordStory,
   SaveEvent,
@@ -133,6 +137,8 @@ export interface ExportContext {
 }
 
 export type RangeKey = '1h' | '24h' | '7d' | '30d' | 'all';
+/** The dashboard also reads rollups, which reach further back than raw rows. */
+export type DashboardRangeKey = RangeKey | '90d';
 export type ExplorerView = 'operations' | 'executions';
 export type SortKey = 'newest' | 'oldest' | 'slowest';
 
@@ -196,36 +202,68 @@ export interface TraceView {
   steps: Record<string, StepRegistration>;
 }
 
-export interface Finding {
-  id: string;
-  severity: 'critical' | 'warning' | 'info';
-  title: string;
-  detail: string;
-  /** Explorer query that shows the evidence. */
-  query?: string;
+/** A rule-based finding on the dashboard (see `insights` in core). */
+export type Finding = Insight;
+
+/**
+ * Change against the previous period of equal length. Both periods come from the same source (raw
+ * rows or rollups), and volumes are compared per hour of collected data, so gaps don't read as drops.
+ */
+export interface PeriodChange {
+  /** Relative change in executions per collected hour (0.2 = 20 % more); `null` if it didn't run before. */
+  count: number | null;
+  /** Difference in error rate (0.01 = one percentage point more). */
+  errorRate: number | null;
+  /** Relative change in p95 duration. */
+  p95: number | null;
 }
 
 export interface DashboardStep extends StepStats {
   /** Executions per bucket across the range (for a sparkline). */
   spark: number[];
+  /** `null` when there's no previous period to compare with. */
+  change: PeriodChange | null;
   stepName: string | null;
   stage: number | null;
   filteringAttributes: string[] | null | undefined;
 }
 
 export interface DashboardData {
-  range: RangeKey;
+  range: DashboardRangeKey;
   from: number;
   to: number;
   bucketMs: number;
+  /**
+   * `raw`: computed from stored rows, percentiles exact. `rollups`: part of the range is older
+   * than the raw rows still kept, so everything comes from hourly rollups and percentiles are
+   * estimates (within 25 %).
+   */
+  source: 'raw' | 'rollups';
   kpis: Kpis;
+  /** KPI changes (executions, error rate, p95 sync duration); `null` for "All history" or too little earlier history. */
+  change: PeriodChange | null;
+  /** Share of the range when data was being collected (0–1). */
+  coverage: number;
   series: TimeBucket[];
   heatmap: Heatmap;
   steps: DashboardStep[];
   findings: Finding[];
+  /** Periods in the range with no data collected, including the time before local history starts. */
   gaps: Array<[number, number]>;
-  /** Earliest execution held locally. */
+  /** Earliest execution held locally, in raw rows or rollups. */
   oldest: number | null;
+  /** The platform's own counters per plug-in type; `canRead` is `false` without read access. */
+  platform: PlatformSummary & { canRead: boolean | null };
+}
+
+export interface CascadeView {
+  graph: CascadeGraph;
+  from: number;
+  to: number;
+  /** Tables that appear in the unfiltered graph, for the filter. */
+  tables: string[];
+  /** Step registrations of the nodes, by step id. */
+  steps: Record<string, StepRegistration>;
 }
 
 export interface WorkerApi {
@@ -238,7 +276,13 @@ export interface WorkerApi {
   operationExecutions(correlationId: string): Promise<TraceLogRecord[]>;
   execution(id: string): Promise<ExecutionDetail | null>;
   trace(correlationId: string): Promise<TraceView | null>;
-  dashboard(range: RangeKey): Promise<DashboardData>;
+  dashboard(range: DashboardRangeKey): Promise<DashboardData>;
+  /** Which steps ran inside which, from the raw rows in the range; optionally only around one table. */
+  cascade(range: RangeKey, table?: string | null): Promise<CascadeView>;
+  /** The insight thresholds for this environment. */
+  insightThresholds(): Promise<InsightThresholds>;
+  /** Saves thresholds for this environment; `null` restores the defaults. Returns what is now in effect. */
+  setInsightThresholds(thresholds: Partial<InsightThresholds> | null): Promise<InsightThresholds>;
   forget(): Promise<void>;
   // v0.2
   recentRecords(limit?: number): Promise<RecentRecord[]>;
@@ -267,5 +311,16 @@ export const RANGE_LABELS: Record<RangeKey, string> = {
   '24h': 'Last 24 hours',
   '7d': 'Last 7 days',
   '30d': 'Last 30 days',
+  all: 'All history',
+};
+
+export const DASHBOARD_RANGE_MS: Record<DashboardRangeKey, number | null> = { ...RANGE_MS, '90d': 90 * 86_400_000 };
+
+export const DASHBOARD_RANGE_LABELS: Record<DashboardRangeKey, string> = {
+  '1h': 'Last hour',
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
   all: 'All history',
 };

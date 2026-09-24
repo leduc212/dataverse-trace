@@ -22,6 +22,7 @@ import { Tour, startTour, useFirstVisitTour } from './components/Tour.tsx';
 import { DashboardPage } from './pages/DashboardPage.tsx';
 import { ExpectedPage } from './pages/ExpectedPage.tsx';
 import { ExplorerPage } from './pages/ExplorerPage.tsx';
+import { GraphPage } from './pages/GraphPage.tsx';
 import { RecordPage } from './pages/RecordPage.tsx';
 import { SessionPage } from './pages/SessionPage.tsx';
 import { StatusPage } from './pages/StatusPage.tsx';
@@ -157,6 +158,8 @@ export function App({ themePreference, onThemeChange }: AppProps) {
     content = <WatchPage />;
   } else if (route.page === 'dashboard') {
     content = <DashboardPage />;
+  } else if (route.page === 'graph') {
+    content = <GraphPage />;
   } else if (route.page === 'status') {
     content = <StatusPage />;
   } else {
@@ -183,6 +186,7 @@ export function App({ themePreference, onThemeChange }: AppProps) {
           </Tab>
           <Tab value="expected">Expected</Tab>
           <Tab value="dashboard">Dashboard</Tab>
+          <Tab value="graph">Cascades</Tab>
           <Tab value="status">Status</Tab>
         </TabList>
         <div className="spacer" />

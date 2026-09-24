@@ -6,15 +6,17 @@ It's a better Plugin Trace Viewer that runs **inside your environment** as a sma
 
 **[Try the demo →](https://leduc212.github.io/dataverse-trace/)** (generated data for a fictional insurer; nothing to install)
 
-![The demo: a recursive loop in the explorer, a record's save with an inferred cloud flow link and its evidence, expected vs. actual, and watch mode filling in a live save](docs/media/demo.gif)
+![The demo: a recursive loop in the explorer, a record's save with an inferred cloud flow link and its evidence, expected vs. actual, watch mode filling in a live save, the dashboard's findings and the cascade graph with its loop](docs/media/demo.gif)
 
-> **Status: v0.2 ("the record story").** Explorer, timeline, dashboard, record story with cloud flows and audit, expected vs. actual, watch mode and shareable sessions work in the demo; testing in real environments is next. See the [roadmap](docs/PLAN.md#roadmap).
+> **Status: v0.3 ("Insights").** Explorer, timeline with critical path, dashboard over months with insight rules, platform statistics, cascade graph with loops, record story with cloud flows and audit, expected vs. actual, watch mode and shareable sessions work in the demo; testing in real environments is next. See the [roadmap](docs/PLAN.md#roadmap).
 
 ## What it does
 
 - **Explorer:** every plug-in execution in local history, grouped into operations (one correlation ID each) or listed flat. A query language (`table:account dur>2s err "timeout"`), facets, a histogram, full-text search over trace text, and a detail panel with find-in-trace and parsed .NET exceptions.
-- **Timeline:** a waterfall of one operation: the sync pipeline in stage and execution order, nested requests inside the step that caused them, and system jobs with their queue time. Links that can't be known exactly show a confidence; whole-second timestamps are shown as estimated, never faked.
-- **Dashboard:** executions, error rate, sync p95, slowest steps, a day × hour heatmap, per-step statistics with trends, and findings such as *"Update step without filtering attributes runs 339 times a day"* or *"Depth 8 reached: possible loop"*.
+- **Timeline:** a waterfall of one operation: the sync pipeline in stage and execution order, nested requests inside the step that caused them, and system jobs with their queue time. Links that can't be known exactly show a confidence; whole-second timestamps are shown as estimated, never faked. The **critical path** says where the time went (*"PolicyErpSync 3.00 s (53 %) · the notify job waited 2.00 s in the queue"*), with a minimap, collapse by depth and a filter for inferred links.
+- **Dashboard:** executions, error rate, sync p95, slowest steps, a day × hour heatmap and per-step statistics, each compared with the previous period, over up to 90 days (hourly summaries outlive the raw rows) with data coverage shown. **Insight rules** with their evidence and adjustable thresholds: *"Update step without filtering attributes runs 339 times a day"*, *"PolicyNotify started failing: 23 of 188 runs in the last 24 hours"*, heavy constructors, retry storms, trace text cut at 10 KB, loops.
+- **Platform statistics:** Dataverse's own counters per plug-in type, which keep counting with trace logging off, with snapshots that show how often they refresh.
+- **Cascades:** a graph of which steps ran inside which, with loops highlighted and the operations that went round them one click away.
 - **Record story:** pick a record and see each save (from audit history: who, when, which columns) with everything it started: the plug-in pipeline, system jobs and **cloud flow runs**. Flow runs carry no record id, so those links are inferred from the flow's trigger (table, filtering columns, filter expression) and timing; each shows its confidence and the evidence behind it, and nothing inferred is drawn as exact.
 - **Expected vs. actual:** everything registered to run for a table and change (plug-in steps in stage and order, classic workflows, business rules, cloud flows) with whether it should run for the changed columns, whether it did, and why not: *"filters on name, telephone1, but the save changed hbr_totalpremium"*.
 - **Watch mode:** pick a record, press Watch, save it in the app, and the timeline fills in as rows arrive (at most 2 requests a second). System Administrators can switch plug-in tracing to *All* for the session: the app asks first and always puts the old value back.
@@ -67,7 +69,7 @@ pnpm dev
 
 | Path | What's there |
 |---|---|
-| [`packages/core`](packages/core) | Framework-free domain logic: span model, correlation rules, waterfall layout, statistics, query language, exception parser |
+| [`packages/core`](packages/core) | Framework-free domain logic: span model, correlation rules, waterfall layout and critical path, statistics and hourly rollups, insight rules, cascade graph, query language, exception parser |
 | [`packages/dataverse`](packages/dataverse) | Web API transport (same-origin, paging, 429 retry), mappers, capability probe, incremental sync engine |
 | [`packages/store`](packages/store) | Local history in IndexedDB (Dexie) |
 | [`packages/demo`](packages/demo) | Seeded demo environment and a mock Web API that answers the same queries, so the demo runs the real sync code |

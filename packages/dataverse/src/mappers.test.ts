@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auditChanges, mapAsyncOperation, mapAudit, mapFlowEvent, mapFlowRun, mapProcesses, mapStep, mapTraceBlob, mapTraceLog, precisionOf } from './mappers.ts';
+import { auditChanges, mapAsyncOperation, mapAudit, mapFlowEvent, mapFlowRun, mapPluginTypeStat, mapProcesses, mapStep, mapTraceBlob, mapTraceLog, precisionOf } from './mappers.ts';
 import { addGap } from './sync.ts';
 import { stepsByIdQuery, traceLogsQuery } from './queries.ts';
 
@@ -222,5 +222,24 @@ describe('v0.2 mappers', () => {
       },
     });
     expect(changes).toEqual({ changedColumns: ['hbr_status', 'ownerid'], newValues: { hbr_status: 2, ownerid: 'u2' } });
+  });
+});
+
+describe('mapPluginTypeStat', () => {
+  it('reads the counters and the plug-in type name, tolerating missing values', () => {
+    const stat = mapPluginTypeStat({
+      plugintypestatisticid: 's1',
+      _plugintypeid_value: 't1',
+      [`_plugintypeid_value${FV}`]: 'Harbor.Plugins.Sample',
+      executecount: 120,
+      failurecount: 3,
+      failurepercent: 2,
+      crashcount: null,
+      averageexecutetimeinmilliseconds: 41,
+      terminatecpucontributionpercent: 0,
+      modifiedon: '2026-09-24T08:00:00Z',
+    });
+    expect(stat).toMatchObject({ id: 's1', pluginTypeId: 't1', typeName: 'Harbor.Plugins.Sample', executeCount: 120, failureCount: 3, failurePercent: 2, crashCount: 0, crashPercent: null, averageExecuteMs: 41, terminateCpuPercent: 0, modifiedOn: Date.UTC(2026, 8, 24, 8) });
+    expect(() => mapPluginTypeStat({ plugintypestatisticid: 's2' })).toThrow(/modifiedon/);
   });
 });

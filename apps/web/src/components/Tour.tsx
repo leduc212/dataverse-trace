@@ -29,7 +29,7 @@ const STEPS: Step[] = [
   },
   {
     title: 'Trends and findings',
-    body: 'The dashboard spots problems across days: PolicyErpSync got slower after a deployment, ContactAudit runs on every contact update, and a flow fails now and then.',
+    body: 'The dashboard spots problems across days and compares each week with the one before: PolicyErpSync got slower after a deployment, PolicyNotify started failing this morning, and ContactAudit runs on every contact update. The Cascades tab shows the loop behind "Depth 8".',
     go: () => navigate(href('dashboard', { r: '7d' })),
   },
   {

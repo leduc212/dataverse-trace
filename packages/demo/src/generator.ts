@@ -19,6 +19,9 @@
 //     inactive legacy flow.
 //   - A burst of three status changes within two seconds (ambiguous flow matches).
 //   - One flow-run ingestion event (a gap in run history).
+//   - A mail relay outage in the last 10 hours: PolicyNotify starts failing (an error spike).
+//   - Failing ERP exports log the gateway's response, so their trace text hits the 10 KB limit.
+import { demoPluginTypeStatistics } from './platform.ts';
 import { Rng } from './random.ts';
 
 type Raw = Record<string, unknown>;
@@ -34,6 +37,8 @@ export interface DemoOptions {
 
 export interface DemoDataset {
   now: number;
+  /** Start of the generated history: the first hour with raw rows. */
+  from: number;
   seed: number;
   userId: string;
   organizationId: string;
@@ -52,6 +57,8 @@ export interface DemoDataset {
   workflows: Raw[];
   /** Live trigger subscriptions of the active cloud flows. */
   callbackRegistrations: Raw[];
+  /** The platform's counters per plug-in type (`plugintypestatistic`). */
+  pluginTypeStatistics: Raw[];
   /** Current values of every record, by table then id (primary id and name included). */
   records: Record<string, Record<string, Raw>>;
   /** Table metadata, as EntityDefinitions returns it. */
@@ -522,7 +529,7 @@ function policyUpdate(ctx: OpContext, t: number, fixed?: { policy: { id: string;
         depth: 1,
         start: at,
         durationMs: erpMs,
-        constructorMs: b.rng.int(35, 90),
+        constructorMs: b.rng.int(120, 260),
         user: ctx.user,
         lines: [
           enter(erp.typeName, ctx),
@@ -885,6 +892,10 @@ export function generateDemo(options: DemoOptions = {}): DemoDataset {
     if (t > now - days * DAY) updateLoop({ b, user: b.users[1]!, correlationId: rng.uuid(), daysAgo: Math.floor(ago / DAY) }, t);
   }
   statusBurst(b, now - 2 * HOUR - 17 * 60_000, 0);
+  // Incidents applied to the finished history. They don't draw from `rng`, so every scenario
+  // above stays exactly as it was.
+  notifyOutage(b, now);
+  erpResponseDumps(b);
 
   const steps: Raw[] = [...b.steps.values()].map((s) => ({
     sdkmessageprocessingstepid: s.id,
@@ -907,6 +918,7 @@ export function generateDemo(options: DemoOptions = {}): DemoDataset {
   const byCreated = (column: string) => (x: Raw, y: Raw) => String(x[column]).localeCompare(String(y[column]));
   return {
     now,
+    from: firstHour,
     seed,
     userId: b.users[0]!.id,
     organizationId: '0f5c2a1e-7b3d-4c9e-8a21-6d4f0b9c3e71',
@@ -947,10 +959,63 @@ export function generateDemo(options: DemoOptions = {}): DemoDataset {
         filterexpression: f.filter,
         scope: 4,
       })),
+    pluginTypeStatistics: demoPluginTypeStatistics(b.traceLogs, now),
     records: recordRows(b),
     entities: ENTITIES,
     truth: b.truth,
   };
+}
+
+/** The platform keeps the last 10,240 characters of trace text. */
+const TRACE_TEXT_LIMIT = 10_240;
+
+/**
+ * The mail relay has been failing for the last 10 hours: every fourth PolicyNotify run throws, and
+ * its system job fails (async plug-ins don't retry an InvalidPluginExecutionException).
+ */
+function notifyOutage(b: Builder, now: number): void {
+  const step = b.step('policyNotify');
+  const from = now - 10 * HOUR;
+  const error = `Microsoft.Xrm.Sdk.InvalidPluginExecutionException: Could not queue the email: the mail relay did not respond (smtp.harbor.example:587, timeout 30 s).
+   at Harbor.Plugins.MailQueue.Enqueue(Email email) in C:\\build\\Harbor.Plugins\\MailQueue.cs:line 41
+   at Harbor.Plugins.PolicyNotify.Execute(IServiceProvider serviceProvider) in C:\\build\\Harbor.Plugins\\PolicyNotify.cs:line 28`;
+  const runs = b.traceLogs.filter((r) => r['pluginstepid'] === step.id && Date.parse(String(r['performanceexecutionstarttime'])) >= from);
+  runs.sort((x, y) => String(x['performanceexecutionstarttime']).localeCompare(String(y['performanceexecutionstarttime'])));
+  const failed = new Set<string>();
+  runs.forEach((r, i) => {
+    if (i % 4 !== 3) return;
+    r['exceptiondetails'] = error;
+    r['messageblock'] = String(r['messageblock']).replace(/\nQueued email to the policy owner[\s\S]*$/, '\nQueueing email to the policy owner\nMail relay timeout after 30 s\nThrowing InvalidPluginExecutionException');
+    failed.add(String(r['correlationid']));
+  });
+  for (const job of b.jobs) {
+    if (job['_owningextensionid_value'] !== step.id || !failed.has(String(job['correlationid'])) || job['statuscode'] !== 30) continue;
+    job['statuscode'] = 31;
+    job[`statuscode${FV}`] = 'Failed';
+    job['errorcode'] = -2147204303;
+    job['friendlymessage'] = 'Could not queue the email: the mail relay did not respond.';
+  }
+}
+
+/** The last two attempts of each failing ERP export log the gateway's diagnostics, cut at 10 KB. */
+function erpResponseDumps(b: Builder): void {
+  const step = b.step('claimErpExport');
+  const byOperation = new Map<string, Raw[]>();
+  for (const r of b.traceLogs) {
+    if (r['pluginstepid'] !== step.id || !r['exceptiondetails']) continue;
+    const list = byOperation.get(String(r['correlationid'])) ?? [];
+    list.push(r);
+    byOperation.set(String(r['correlationid']), list);
+  }
+  const dump = Array.from({ length: 260 }, (_, n) => `[erp-gateway] ${String(n).padStart(3, '0')} upstream pool exhausted on erp-0${n % 4}, queue depth ${(n * 37) % 900}, retry in ${(n % 5) + 1} s`).join('\n');
+  for (const attempts of byOperation.values()) {
+    attempts.sort((x, y) => String(x['performanceexecutionstarttime']).localeCompare(String(y['performanceexecutionstarttime'])));
+    for (const r of attempts.slice(-2)) {
+      const lines = String(r['messageblock']).split('\n');
+      const text = [lines[0], lines[1], 'ERP response body follows', dump, ...lines.slice(2)].join('\n');
+      r['messageblock'] = text.slice(-TRACE_TEXT_LIMIT);
+    }
+  }
 }
 
 // ── simulated saves (watch mode in the demo) ─────────────────────────────────

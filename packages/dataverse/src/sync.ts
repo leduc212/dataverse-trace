@@ -7,16 +7,28 @@
 //  flowRuns   – cloud flow runs, incremental on modifiedon, 7-day lookback
 //  flowEvents – flow run ingestion gap signals
 //  processes  – workflows, business rules and flow definitions (with triggers), refreshed every 6 h
+//  pluginStats – the platform's counters per plug-in type, every 15 min; a snapshot is kept per update
 //
 // The platform deletes trace logs older than ~24 h. If more than 24 h passed since the last
 // successful trace-log sync, the gap is recorded so charts can shade it instead of showing a dip.
 import { annotateSubscriptions, type TriggerSubscription } from '@dvt/core';
-import type { AsyncOperationRecord, FlowEventRecord, FlowRunRecord, ProcessDefinition, StepRegistration, TraceBlob, TraceLogRecord } from '@dvt/core';
-import { mapAsyncOperation, mapCallbackRegistration, mapFlowEvent, mapFlowRun, mapProcesses, mapStep, mapTraceBlob, mapTraceLog, type Raw } from './mappers.ts';
-import { asyncOperationsQuery, callbackRegistrationsQuery, flowDefinitionsQuery, flowEventsQuery, flowRunsQuery, processesQuery, stepsByIdQuery, traceBlobsQuery, traceLogsQuery } from './queries.ts';
+import type { AsyncOperationRecord, FlowEventRecord, FlowRunRecord, PluginTypeStatRecord, ProcessDefinition, StepRegistration, TraceBlob, TraceLogRecord } from '@dvt/core';
+import { mapAsyncOperation, mapCallbackRegistration, mapFlowEvent, mapFlowRun, mapPluginTypeStat, mapProcesses, mapStep, mapTraceBlob, mapTraceLog, type Raw } from './mappers.ts';
+import {
+  asyncOperationsQuery,
+  callbackRegistrationsQuery,
+  flowDefinitionsQuery,
+  flowEventsQuery,
+  flowRunsQuery,
+  pluginTypeStatisticsQuery,
+  processesQuery,
+  stepsByIdQuery,
+  traceBlobsQuery,
+  traceLogsQuery,
+} from './queries.ts';
 import { getAll, pages, type Transport } from './transport.ts';
 
-export type SourceName = 'traceLogs' | 'steps' | 'asyncOps' | 'traceBlobs' | 'flowRuns' | 'flowEvents' | 'processes';
+export type SourceName = 'traceLogs' | 'steps' | 'asyncOps' | 'traceBlobs' | 'flowRuns' | 'flowEvents' | 'processes' | 'pluginStats';
 
 export interface SourceState {
   source: SourceName;
@@ -41,6 +53,8 @@ export interface SyncStore {
   putFlowEvents(rows: FlowEventRecord[]): Promise<void>;
   /** Replaces all process definitions. */
   replaceProcesses(rows: ProcessDefinition[]): Promise<void>;
+  /** Keeps a snapshot of each statistic row whose version isn't stored yet; returns how many were new. */
+  putPluginStats(rows: PluginTypeStatRecord[], takenAt: number): Promise<number>;
   /** Step ids referenced by stored trace logs and system jobs. */
   referencedStepIds(): Promise<Set<string>>;
   knownStepIds(): Promise<Set<string>>;
@@ -76,6 +90,7 @@ export interface SyncOptions {
 export const DAY_MS = 86_400_000;
 const SERVER_RETENTION_MS = DAY_MS;
 const STEP_REFRESH_MS = 6 * 3_600_000;
+const STATS_REFRESH_MS = 15 * 60_000;
 const STEP_BATCH = 40;
 
 /** Adds a gap, merging it with any gap it overlaps or touches. */
@@ -289,6 +304,17 @@ export class SyncEngine {
     });
   }
 
+  /** Platform statistics per plug-in type. They work with tracing off, so they're synced regardless. */
+  syncPluginStats(signal?: AbortSignal, force = false): Promise<SyncProgress> {
+    return this.#run('pluginStats', async (state, progress) => {
+      const { transport, store, now } = this.#o;
+      if (!force && state.lastOkAt !== null && now() - state.lastOkAt < STATS_REFRESH_MS) return 0;
+      const rows = (await getAll<Raw>(transport, pluginTypeStatisticsQuery(), signal ? { signal } : {})).map(mapPluginTypeStat);
+      progress(await store.putPluginStats(rows, now()));
+      return 0;
+    });
+  }
+
   /** Runs every source in dependency order. Errors in one source don't stop the others. */
   async syncAll(signal?: AbortSignal): Promise<SyncReport> {
     const startedAt = this.#o.now();
@@ -299,6 +325,7 @@ export class SyncEngine {
     results.push(await this.syncFlowRuns(signal));
     results.push(await this.syncFlowEvents(signal));
     results.push(await this.syncProcesses(signal));
+    results.push(await this.syncPluginStats(signal));
     results.push(await this.syncTraceBlobs(signal));
     return { startedAt, finishedAt: this.#o.now(), results };
   }

@@ -33,9 +33,31 @@ describe('generateDemo', () => {
   });
 
   it('includes failed async jobs with retries', () => {
-    const failed = jobs.filter((j) => j.statusCode === 31);
+    const failed = jobs.filter((j) => j.statusCode === 31 && j.regarding?.table === 'hbr_claim');
     expect(failed.length).toBeGreaterThan(5);
-    expect(failed.every((j) => j.retryCount === 3 && j.regarding?.table === 'hbr_claim')).toBe(true);
+    expect(failed.every((j) => j.retryCount === 3)).toBe(true);
+  });
+
+  it('includes a mail relay outage: PolicyNotify fails only in the last 10 hours, and its jobs fail without retries', () => {
+    const notify = logs.filter((l) => l.typeName === 'Harbor.Plugins.PolicyNotify');
+    const failing = notify.filter((l) => l.exception);
+    expect(failing.length).toBeGreaterThanOrEqual(10);
+    expect(failing.every((l) => l.start >= NOW - 10 * 3_600_000)).toBe(true);
+    const failedJobs = jobs.filter((j) => j.statusCode === 31 && j.regarding?.table === 'hbr_policy');
+    expect(failedJobs.length).toBe(failing.length);
+    expect(failedJobs.every((j) => j.retryCount === 0)).toBe(true);
+  });
+
+  it('cuts the trace text of the last two attempts of a failing ERP export at 10 KB, keeping the end', () => {
+    const texts = demo.traceLogs.filter((r) => r['typename'] === 'Harbor.Plugins.ClaimErpExport' && r['exceptiondetails']).map((r) => String(r['messageblock']));
+    const cut = texts.filter((t) => t.length === 10_240);
+    expect(cut.length).toBe(texts.length / 2);
+    expect(cut.every((t) => t.endsWith('ERP returned 503'))).toBe(true);
+  });
+
+  it('has a PolicyErpSync constructor heavy enough to notice', () => {
+    const ctor = logs.filter((l) => l.typeName === 'Harbor.Plugins.PolicyErpSync').map((l) => l.constructorMs!);
+    expect(Math.min(...ctor)).toBeGreaterThanOrEqual(120);
   });
 
   it('makes PolicyErpSync slower in the last 5 days', () => {

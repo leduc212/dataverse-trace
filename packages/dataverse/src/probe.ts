@@ -26,6 +26,8 @@ export interface Capabilities {
   canReadProcesses: boolean;
   /** Needs prvReadAuditSummary (and auditing turned on to be useful). */
   canReadAudit: boolean;
+  /** The platform's per-plug-in-type counters, which work even with tracing off. */
+  canReadPluginStats: boolean;
   /** Human-readable explanations for anything missing. */
   notes: string[];
   checkedAt: number;
@@ -92,13 +94,14 @@ export async function probeCapabilities(transport: Transport, now: () => number 
     notes.push('Plug-in trace logging is set to Exceptions: only failing executions are logged.');
   }
 
-  const [traceLogs, asyncOps, steps, flowRuns, processes, audit] = await Promise.all([
+  const [traceLogs, asyncOps, steps, flowRuns, processes, audit, pluginStats] = await Promise.all([
     canRead(transport, 'plugintracelogs?$select=plugintracelogid&$top=1'),
     canRead(transport, 'asyncoperations?$select=asyncoperationid&$top=1'),
     canRead(transport, 'sdkmessageprocessingsteps?$select=sdkmessageprocessingstepid&$top=1'),
     canRead(transport, 'flowruns?$select=flowrunid&$top=1'),
     canRead(transport, 'workflows?$select=workflowid&$top=1'),
     canRead(transport, 'audits?$select=auditid&$top=1'),
+    canRead(transport, 'plugintypestatistics?$select=plugintypestatisticid&$top=1'),
   ]);
   if (!traceLogs.ok) notes.push(`Can't read plug-in trace logs (${traceLogs.why}).`);
   if (!asyncOps.ok) notes.push(`Can't read system jobs (${asyncOps.why}); the async lane will be limited.`);
@@ -107,6 +110,7 @@ export async function probeCapabilities(transport: Transport, now: () => number 
   if (!processes.ok) notes.push(`Can't read processes (${processes.why}); expected vs. actual won't include flows and workflows.`);
   if (!audit.ok) notes.push(`Can't read audit history (${audit.why}); record stories will rely on system jobs only.`);
   else if (settings.isAuditEnabled === false) notes.push('Auditing is off for this environment, so record stories can only find saves that started system jobs.');
+  if (!pluginStats.ok) notes.push(`Can't read plug-in type statistics (${pluginStats.why}); the platform statistics panel will be empty.`);
 
   const admin = userId ? await isSystemAdministrator(transport, userId) : null;
   let canReadTraceText: boolean | null = admin;
@@ -135,6 +139,7 @@ export async function probeCapabilities(transport: Transport, now: () => number 
     canReadFlowRuns: flowRuns.ok,
     canReadProcesses: processes.ok,
     canReadAudit: audit.ok,
+    canReadPluginStats: pluginStats.ok,
     notes,
     checkedAt: now(),
   };

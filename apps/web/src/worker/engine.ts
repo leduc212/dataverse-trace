@@ -2,6 +2,12 @@
 import {
   assembleTrace,
   buildRecordStory,
+  buildCascade,
+  buildRollups,
+  hourOf,
+  resolveThresholds,
+  type InsightThresholds,
+  type Trace,
   expectedFor,
   findSaves,
   layoutWaterfall,
@@ -22,6 +28,7 @@ import {
   fetchOrganization,
   fetchRecord,
   fetchStepsForTable,
+  mapTraceLog,
   probeCapabilities,
   searchRecords,
   setTraceSetting,
@@ -32,33 +39,42 @@ import {
   type Transport,
 } from '@dvt/dataverse';
 import type { DemoDataset, MockTransport } from '@dvt/demo';
-import { LocalStore } from '@dvt/store';
-import type {
-  DashboardData,
-  ExecutionDetail,
-  ExpectedRequest,
-  ExpectedResult,
-  ExplorerRow,
-  ExportContext,
-  HostInfo,
-  RecentRecord,
-  RecordInfo,
-  RecordSaves,
-  RecordStoryView,
-  LogQuery,
-  LogQueryResult,
-  RangeKey,
-  Status,
-  TraceView,
-  WatchStatus,
-  WatchView,
-  WorkerApi,
+import { LocalStore, RAW_FROM } from '@dvt/store';
+import {
+  DASHBOARD_RANGE_MS,
+  RANGE_MS,
+  type CascadeView,
+  type RangeKey,
+  type DashboardData,
+  type DashboardRangeKey,
+  type ExecutionDetail,
+  type ExpectedRequest,
+  type ExpectedResult,
+  type ExplorerRow,
+  type ExportContext,
+  type HostInfo,
+  type RecentRecord,
+  type RecordInfo,
+  type RecordSaves,
+  type RecordStoryView,
+  type LogQuery,
+  type LogQueryResult,
+  type Status,
+  type TraceView,
+  type WatchStatus,
+  type WatchView,
+  type WorkerApi,
 } from '../shared/api.ts';
 import { Dataset } from './dataset.ts';
 import { explore, facets, histogram } from './explore.ts';
 import { dashboard } from './insights.ts';
 
 const SYNC_INTERVAL_MS = 5 * 60_000;
+/** Retention is applied after a sync, at most this often. */
+const PRUNE_INTERVAL_MS = 6 * 3_600_000;
+const LAST_PRUNE = 'lastPruneAt';
+const INSIGHT_THRESHOLDS = 'insightThresholds';
+const DAY_MS = 86_400_000;
 /** Cap on trace text kept in memory for full-text search (characters). */
 const TEXT_CACHE_LIMIT = 60_000_000;
 const MAX_CACHED_QUERIES = 4;
@@ -116,6 +132,10 @@ export class Engine implements WorkerApi {
     watch: idleWatch(),
   };
   #demo: DemoDataset | null = null;
+  /** Raw trace logs are complete from here on; older history exists only as rollups. */
+  #rawFrom = -Infinity;
+  #oldestRollup: number | null = null;
+  #thresholds: InsightThresholds = resolveThresholds(null);
   #metadata = new Map<string, Promise<EntityMetadata>>();
   #audits = new Map<string, AuditRecord[]>();
   #stepsFor = new Map<string, Promise<StepRegistration[]>>();
@@ -170,6 +190,7 @@ export class Engine implements WorkerApi {
       this.#status.capabilities = this.#capabilities;
       await this.#store.setMeta('capabilities', this.#capabilities);
       await this.#restorePending();
+      if (this.#demo) await this.#seedDemoHistory(this.#demo);
       await this.#reload();
       this.#status.ready = true;
       this.#emit();
@@ -187,9 +208,21 @@ export class Engine implements WorkerApi {
     }
   }
 
+  /** The demo's older weeks exist only as rollups (see `demoHistory`), with one collection gap. */
+  async #seedDemoHistory(demo: DemoDataset): Promise<void> {
+    const { demoHistory } = await import('@dvt/demo');
+    const history = demoHistory(buildRollups(demo.traceLogs.map(mapTraceLog)), { now: demo.now, rawFrom: demo.from });
+    const store = this.#store!;
+    await store.putRollups(history.rollups);
+    await store.setMeta(RAW_FROM, history.rawFrom);
+    await store.putSourceState({ source: 'traceLogs', watermark: null, lastRunAt: null, lastOkAt: null, lastError: null, gaps: history.gaps, firstOkAt: null });
+    const { demoPluginStatHistory } = await import('@dvt/demo');
+    await store.putPluginStatSnapshots(demoPluginStatHistory(demo.traceLogs, demo.from, demo.now));
+  }
+
   async #reload(): Promise<void> {
     const store = this.#store!;
-    const [logs, jobs, steps, sources, storage, flowRuns, processes, flowEvents] = await Promise.all([
+    const [logs, jobs, steps, sources, storage, flowRuns, processes, flowEvents, rawFrom, oldestRollup, thresholds] = await Promise.all([
       store.allTraceLogs(),
       store.allAsyncOperations(),
       store.allSteps(),
@@ -198,8 +231,14 @@ export class Engine implements WorkerApi {
       store.allFlowRuns(),
       store.allProcesses(),
       store.allFlowEvents(),
+      store.getMeta<number>(RAW_FROM),
+      store.oldestRollupHour(),
+      store.getMeta<Partial<InsightThresholds>>(INSIGHT_THRESHOLDS),
     ]);
     this.#data = new Dataset(logs, jobs, steps, flowRuns, processes, flowEvents);
+    this.#rawFrom = rawFrom ?? -Infinity;
+    this.#oldestRollup = oldestRollup;
+    this.#thresholds = resolveThresholds(thresholds);
     this.#status.sources = sources;
     this.#status.storage = storage;
     this.#status.dataVersion++;
@@ -246,6 +285,9 @@ export class Engine implements WorkerApi {
         return c.canReadFlowRuns;
       case 'processes':
         return c.canReadProcesses;
+      case 'pluginStats':
+        // Capabilities saved by v0.2 don't have this yet: try, and let a failure say why.
+        return c.canReadPluginStats ?? null;
     }
   }
 
@@ -286,9 +328,11 @@ export class Engine implements WorkerApi {
         await engine.syncFlowRuns();
         await engine.syncFlowEvents();
         await engine.syncProcesses();
+        await engine.syncPluginStats();
         await this.#reload();
         this.#emit();
         await engine.syncTraceBlobs();
+        await this.#prune();
         await this.#reload();
         this.#status.lastSyncAt = this.clock();
         this.#channel?.postMessage('data-changed');
@@ -309,11 +353,22 @@ export class Engine implements WorkerApi {
     }
   }
 
+  /** Applies retention (raw rows 30 days, trace text 14, rollups 400) every few hours. */
+  async #prune(): Promise<void> {
+    const store = this.#store!;
+    const now = this.clock();
+    const last = await store.getMeta<number>(LAST_PRUNE);
+    if (last !== undefined && now - last < PRUNE_INTERVAL_MS) return;
+    await store.prune(now);
+    await store.setMeta(LAST_PRUNE, now);
+  }
+
   async forget(): Promise<void> {
     if (!this.#store || !this.#host) return;
     if (this.#timer) clearInterval(this.#timer);
     await this.#store.destroy();
     this.#store = new LocalStore(this.#host.kind === 'demo' ? 'demo' : this.#host.envKey);
+    if (this.#demo) await this.#seedDemoHistory(this.#demo);
     await this.#reload();
     this.#emit();
     void this.syncNow();
@@ -397,9 +452,59 @@ export class Engine implements WorkerApi {
     return { trace, layout: layoutWaterfall(trace), steps };
   }
 
-  async dashboard(range: RangeKey): Promise<DashboardData> {
+  async dashboard(range: DashboardRangeKey): Promise<DashboardData> {
     const gaps = this.#status.sources.find((s) => s.source === 'traceLogs')?.gaps ?? [];
-    return dashboard(this.#data, range, this.#now(), this.#capabilities, gaps);
+    const now = this.#now();
+    const span = DASHBOARD_RANGE_MS[range];
+    // Rollups for this range and the previous one, and at least 8 days for the error-spike baseline.
+    const reach = span === null ? -Infinity : hourOf(Math.min(now - 2 * span, now - 8 * DAY_MS));
+    const [rollups, pluginStats] = this.#store ? await Promise.all([this.#store.rollupsBetween(reach, Infinity), this.#store.allPluginStats()]) : [[], []];
+    return dashboard(this.#data, range, now, this.#capabilities, gaps, { rollups, rawFrom: this.#rawFrom, oldestRollup: this.#oldestRollup, pluginStats }, this.#thresholds);
+  }
+
+  async cascade(range: RangeKey, table?: string | null): Promise<CascadeView> {
+    const now = this.#now();
+    const span = RANGE_MS[range];
+    const from = span === null ? -Infinity : now - span;
+    // Only operations with nested requests can add edges.
+    const nested = new Set<string>();
+    for (const log of this.#data.logsBetween(from, now)) if (log.depth >= 2 && log.correlationId) nested.add(log.correlationId);
+    const traces: Trace[] = [];
+    for (const correlationId of [...nested].sort()) {
+      const trace = assembleTrace(correlationId, { traceLogs: this.#data.logsByCorrelation.get(correlationId) ?? [], asyncOps: [], steps: this.#data.steps, now });
+      if (trace) traces.push(trace);
+    }
+    const full = buildCascade(traces, this.#data.logsById);
+    const tables = [...new Set(full.nodes.map((n) => n.primaryEntity).filter((t): t is string => t !== null))].sort();
+    let graph = full;
+    if (table) {
+      // The table's steps, and what they cause or are caused by.
+      const own = new Set(full.nodes.filter((n) => n.primaryEntity === table).map((n) => n.key));
+      const edges = full.edges.filter((e) => own.has(e.from) || own.has(e.to));
+      const keep = new Set(edges.flatMap((e) => [e.from, e.to]).concat([...own]));
+      graph = { ...full, nodes: full.nodes.filter((n) => keep.has(n.key)), edges, cycles: full.cycles.filter((c) => c.nodes.some((k) => own.has(k))) };
+    }
+    const steps: Record<string, StepRegistration> = {};
+    for (const n of graph.nodes) if (n.stepId && this.#data.steps.has(n.stepId)) steps[n.stepId] = this.#data.steps.get(n.stepId)!;
+    return {
+      graph,
+      from: span === null ? (this.#data.logs[this.#data.logs.length - 1]?.start ?? now) : from,
+      to: now,
+      tables,
+      steps,
+    };
+  }
+
+  async insightThresholds(): Promise<InsightThresholds> {
+    return this.#thresholds;
+  }
+
+  async setInsightThresholds(thresholds: Partial<InsightThresholds> | null): Promise<InsightThresholds> {
+    this.#thresholds = resolveThresholds(thresholds);
+    await this.#store?.setMeta(INSIGHT_THRESHOLDS, thresholds === null ? null : this.#thresholds);
+    this.#status.dataVersion++;
+    this.#emit();
+    return this.#thresholds;
   }
 
   // ── v0.2: records ──────────────────────────────────────────────────────────

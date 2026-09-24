@@ -1,148 +1,173 @@
-// Dashboard data and rule-based findings.
+// Dashboard data: statistics from raw rows or rollups, changes against the previous period, and the insight rules.
 import {
+  aggregateRollups,
   computeKpis,
   computeStepStats,
-  formatDuration,
-  formatPercent,
+  coverage,
   heatmapByDayHour,
+  heatmapFromRollups,
+  hourOf,
+  insights,
+  kpisFromRollups,
+  stepStatsFromAggregates,
+  summarizePlatformStats,
+  stepKeyOf,
   timeSeries,
-  type OrganizationSettings,
+  timeSeriesFromRollups,
+  type Heatmap,
+  type InsightThresholds,
+  type PluginTypeStatSnapshot,
+  type Kpis,
+  type StepHourRollup,
+  type StepStats,
+  type TimeBucket,
   type TraceLogRecord,
 } from '@dvt/core';
-import type { Capabilities } from '@dvt/dataverse';
-import { RANGE_MS, type DashboardData, type DashboardStep, type Finding, type RangeKey } from '../shared/api.ts';
+import { addGap, type Capabilities } from '@dvt/dataverse';
+import { DASHBOARD_RANGE_MS, type DashboardData, type DashboardRangeKey, type DashboardStep, type PeriodChange } from '../shared/api.ts';
 import type { Dataset } from './dataset.ts';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const SPARK_BUCKETS = 14;
 
-function bucketFor(range: RangeKey, spanMs: number): number {
+function bucketFor(range: DashboardRangeKey, spanMs: number): number {
   if (range === '1h') return 5 * 60_000;
   if (range === '24h') return HOUR;
   if (range === '7d') return 6 * HOUR;
-  return spanMs > 45 * DAY ? 7 * DAY : DAY;
+  if (range === '90d') return DAY;
+  return spanMs > 120 * DAY ? 7 * DAY : DAY;
 }
 
-const quote = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
-
-export function findings(steps: DashboardStep[], logs: readonly TraceLogRecord[], days: number, settings: OrganizationSettings | null, caps: Capabilities | null): Finding[] {
-  const out: Finding[] = [];
-  // Loop risk: deep executions.
-  const deep = new Set(logs.filter((l) => l.depth >= 6).map((l) => l.correlationId));
-  if (deep.size > 0) {
-    const maxDepth = Math.max(...logs.map((l) => l.depth));
-    out.push({
-      id: 'deep',
-      severity: 'critical',
-      title: `Depth ${maxDepth} reached in ${deep.size} operation${deep.size === 1 ? '' : 's'}`,
-      detail: 'Executions this deep usually mean plugins are updating each other in a loop.',
-      query: 'depth>=6',
-    });
-  }
-  for (const s of steps) {
-    const perDay = s.count / Math.max(days, 1 / 24);
-    if (s.messageName === 'Update' && s.filteringAttributes === null && perDay >= 100) {
-      out.push({
-        id: `nofilter:${s.key}`,
-        severity: 'warning',
-        title: `${s.typeName} has no filtering attributes`,
-        detail: `It runs on every update of ${s.primaryEntity ?? 'its table'}: ${Math.round(perDay).toLocaleString('en-US')} runs a day. Set filtering attributes so it only runs when the columns it reads change.`,
-        query: `type:${quote(s.typeName)} msg:Update`,
-      });
-    }
-    if (s.mode === 'sync' && s.count >= 10 && s.p95 > 2000) {
-      out.push({
-        id: `slow:${s.key}`,
-        severity: 'warning',
-        title: `${s.typeName} is slow (p95 ${formatDuration(s.p95)})`,
-        detail: `It runs synchronously on ${s.messageName} of ${s.primaryEntity ?? 'its table'}, so users wait for it when they save.`,
-        query: `type:${quote(s.typeName)} dur>2s`,
-      });
-    }
-    if (s.errors >= 5 && s.errorRate >= 0.03) {
-      out.push({
-        id: `errors:${s.key}`,
-        severity: s.errorRate >= 0.2 ? 'critical' : 'warning',
-        title: `${s.typeName} fails ${formatPercent(s.errorRate)} of the time`,
-        detail: `${s.errors.toLocaleString('en-US')} of ${s.count.toLocaleString('en-US')} executions threw an exception.`,
-        query: `type:${quote(s.typeName)} err`,
-      });
-    }
-  }
-  if (settings?.pluginTraceLogSetting === 0) {
-    out.push({ id: 'tracing-off', severity: 'info', title: 'Plug-in trace logging is Off', detail: 'No new executions are being logged. Set it to Exceptions or All in the environment settings.' });
-  } else if (settings?.pluginTraceLogSetting === 1) {
-    out.push({ id: 'tracing-exceptions', severity: 'info', title: 'Only failures are logged', detail: 'Trace logging is set to Exceptions, so volumes and durations only cover failing executions.' });
-  }
-  if (caps?.canReadTraceText === false) {
-    out.push({ id: 'no-text', severity: 'info', title: 'Trace text is hidden', detail: 'Only System Administrators can read trace text, so text search covers exceptions and names only.' });
-  }
-  return out.sort((a, b) => RANK[a.severity] - RANK[b.severity]);
+/** Long-lived history the dashboard reads besides the raw rows in {@link Dataset}. */
+export interface History {
+  /** Rollups from the start of the previous period, or 8 days ago if that's earlier (error-spike baselines). */
+  rollups: StepHourRollup[];
+  /** Raw rows are complete from this time on (older ones were pruned). */
+  rawFrom: number;
+  oldestRollup: number | null;
+  /** Every stored snapshot of the platform's plug-in type statistics. */
+  pluginStats?: PluginTypeStatSnapshot[];
 }
 
-const RANK = { critical: 0, warning: 1, info: 2 } as const;
-
-/** Cloud flow findings: failing flows, and gaps in flow run history. */
-export function flowFindings(data: Dataset, from: number, now: number): Finding[] {
-  const out: Finding[] = [];
-  const runs = data.flowRunsBetween(from, now);
-  const byFlow = new Map<string, { name: string; total: number; failed: number }>();
-  for (const r of runs) {
-    const key = r.workflowId ?? r.flowName ?? 'unknown';
-    const s = byFlow.get(key) ?? { name: r.flowName ?? 'Unnamed flow', total: 0, failed: 0 };
-    s.total++;
-    if (r.status === 'failed') s.failed++;
-    byFlow.set(key, s);
-  }
-  for (const [key, s] of byFlow) {
-    const rate = s.failed / s.total;
-    if (s.failed >= 5 && rate >= 0.03) {
-      out.push({
-        id: `flow-errors:${key}`,
-        severity: rate >= 0.2 ? 'critical' : 'warning',
-        title: `Cloud flow "${s.name}" fails ${formatPercent(rate)} of the time`,
-        detail: `${s.failed.toLocaleString('en-US')} of ${s.total.toLocaleString('en-US')} runs failed. Open a failed run's record story to see what triggered it.`,
-      });
-    }
-  }
-  const gaps = data.flowEvents.filter((e) => e.eventType === 'FlowRunIngestion' && e.createdOn >= from && e.createdOn <= now);
-  if (gaps.length) {
-    out.push({
-      id: 'flow-gaps',
-      severity: 'info',
-      title: 'Flow run history may be incomplete',
-      detail: `Dataverse reported ${gaps.length} flow-run ingestion problem${gaps.length === 1 ? '' : 's'} in this range${gaps[0]!.name ? ` ("${gaps[0]!.name}")` : ''}, so some runs may be missing and flow links may be absent.`,
-    });
-  }
-  return out;
+interface Period {
+  stats: StepStats[];
+  kpis: Kpis;
 }
 
-export function dashboard(data: Dataset, range: RangeKey, now: number, caps: Capabilities | null, gaps: Array<[number, number]>): DashboardData {
-  const span = RANGE_MS[range];
-  const oldest = data.logs.length ? data.logs[data.logs.length - 1]!.start : null;
+function rawPeriod(logs: readonly TraceLogRecord[]): Period {
+  const stats = computeStepStats(logs);
+  return { stats, kpis: computeKpis(logs, stats) };
+}
+
+function rollupPeriod(rollups: readonly StepHourRollup[], from: number, to: number): Period {
+  const stats = stepStatsFromAggregates(aggregateRollups(rollups, from, to).values());
+  return { stats, kpis: kpisFromRollups(rollups, from, to, stats) };
+}
+
+interface Comparable {
+  count: number;
+  errorRate: number;
+  p95: number | null;
+}
+
+/** Volumes are compared per hour of collected data, so a gap in either period doesn't read as a change. */
+function change(after: Comparable, afterCoverage: number, before: Comparable, beforeCoverage: number): PeriodChange {
+  return {
+    count: before.count > 0 ? after.count / afterCoverage / (before.count / beforeCoverage) - 1 : null,
+    errorRate: before.count > 0 ? after.errorRate - before.errorRate : null,
+    p95: after.p95 !== null && before.p95 !== null && before.p95 > 0 ? after.p95 / before.p95 - 1 : null,
+  };
+}
+
+const kpiComparable = (k: Kpis): Comparable => ({ count: k.executions, errorRate: k.errorRate, p95: k.p95SyncMs });
+
+/** Minimum share of the previous period with data collected before it's worth comparing with. */
+const MIN_COMPARE_COVERAGE = 0.5;
+
+export function dashboard(
+  data: Dataset,
+  range: DashboardRangeKey,
+  now: number,
+  caps: Capabilities | null,
+  collectedGaps: Array<[number, number]>,
+  history: History,
+  thresholds?: Partial<InsightThresholds>,
+): DashboardData {
+  const span = DASHBOARD_RANGE_MS[range];
+  const oldestRaw = data.logs.length ? data.logs[data.logs.length - 1]!.start : null;
+  const known = [oldestRaw, history.oldestRollup].filter((t): t is number => t !== null);
+  const oldest = known.length ? Math.min(...known) : null;
   const from = span !== null ? now - span : (oldest ?? now - DAY);
-  const inRange: TraceLogRecord[] = [];
-  for (const log of data.logs) {
-    if (log.start < from) break;
-    if (log.start <= now) inRange.push(log);
-  }
-  const bucketMs = bucketFor(range, now - from);
-  const stats = computeStepStats(inRange);
-  const sparkMs = (now - from) / SPARK_BUCKETS;
+  const source: DashboardData['source'] = from >= history.rawFrom ? 'raw' : 'rollups';
+  const bucketMs = source === 'rollups' ? Math.max(bucketFor(range, now - from), HOUR) : bucketFor(range, now - from);
+
+  // Time before local history starts counts as "not collected", like any other gap.
+  const horizon = span !== null ? from - span : from;
+  const gaps = addGap(collectedGaps, [horizon, oldest ?? now]);
+  const clip = (lo: number, hi: number): Array<[number, number]> => gaps.filter(([x, y]) => y > lo && x < hi).map(([x, y]): [number, number] => [Math.max(x, lo), Math.min(y, hi)]);
+  const rangeGaps = clip(from, now);
+  const currentCoverage = coverage(rangeGaps, from, now);
+
+  const inRange = data.logsBetween(from, now);
+  let current: Period;
+  let series: TimeBucket[];
+  let heatmap: Heatmap;
   const sparks = new Map<string, number[]>();
-  for (const s of stats) sparks.set(s.key, new Array<number>(SPARK_BUCKETS).fill(0));
-  for (const log of inRange) {
-    const key = log.stepId ?? `${log.typeName}|${log.messageName}|${log.primaryEntity ?? ''}|${log.mode}`;
-    const i = Math.min(SPARK_BUCKETS - 1, Math.floor((log.start - from) / sparkMs));
-    const arr = sparks.get(key);
-    if (arr && i >= 0) arr[i]!++;
+  const sparkMs = (now - from) / SPARK_BUCKETS;
+  const spark = (key: string, t: number, n: number) => {
+    let arr = sparks.get(key);
+    if (!arr) sparks.set(key, (arr = new Array<number>(SPARK_BUCKETS).fill(0)));
+    const i = Math.min(SPARK_BUCKETS - 1, Math.floor((t - from) / sparkMs));
+    if (i >= 0) arr[i]! += n;
+  };
+  if (source === 'raw') {
+    current = rawPeriod(inRange);
+    series = timeSeries(inRange, bucketMs, from, now);
+    heatmap = heatmapByDayHour(inRange);
+    for (const log of inRange) spark(stepKeyOf(log), log.start, 1);
+  } else {
+    const rollups = history.rollups.filter((r) => r.hour >= hourOf(from));
+    current = rollupPeriod(rollups, hourOf(from), Infinity);
+    series = timeSeriesFromRollups(rollups, bucketMs, from, now);
+    heatmap = heatmapFromRollups(rollups, from, now);
+    for (const r of rollups) spark(r.stepKey, Math.max(r.hour, from), r.count);
   }
-  const steps: DashboardStep[] = stats.map((s) => {
+
+  // The previous period, compared like for like: raw with raw when raw rows cover both periods,
+  // otherwise rollups with rollups (a 25 % bucket error on one side only would swamp real changes).
+  let kpiChange: PeriodChange | null = null;
+  const stepChange = new Map<string, PeriodChange>();
+  if (span !== null) {
+    const prevFrom = from - span;
+    const previousCoverage = coverage(clip(prevFrom, from), prevFrom, from);
+    if (previousCoverage >= MIN_COMPARE_COVERAGE && currentCoverage > 0) {
+      let before: Period;
+      let after: Period;
+      if (prevFrom >= history.rawFrom) {
+        before = rawPeriod(data.logsBetween(prevFrom, from - 1));
+        after = current;
+      } else {
+        before = rollupPeriod(history.rollups, hourOf(prevFrom), hourOf(from));
+        after = source === 'rollups' ? current : rollupPeriod(history.rollups, hourOf(from), Infinity);
+      }
+      if (before.kpis.executions > 0) {
+        kpiChange = change(kpiComparable(after.kpis), currentCoverage, kpiComparable(before.kpis), previousCoverage);
+        const beforeByKey = new Map(before.stats.map((s) => [s.key, s]));
+        for (const s of after.stats) {
+          const b = beforeByKey.get(s.key);
+          stepChange.set(s.key, b ? change(s, currentCoverage, b, previousCoverage) : { count: null, errorRate: null, p95: null });
+        }
+      }
+    }
+  }
+
+  const steps: DashboardStep[] = current.stats.map((s) => {
     const reg = s.stepId ? data.steps.get(s.stepId) : undefined;
     return {
       ...s,
-      spark: sparks.get(s.key) ?? [],
+      spark: sparks.get(s.key) ?? new Array<number>(SPARK_BUCKETS).fill(0),
+      change: stepChange.get(s.key) ?? null,
       stepName: reg?.name ?? null,
       stage: reg?.stage ?? null,
       filteringAttributes: reg ? reg.filteringAttributes : undefined,
@@ -153,12 +178,30 @@ export function dashboard(data: Dataset, range: RangeKey, now: number, caps: Cap
     from,
     to: now,
     bucketMs,
-    kpis: computeKpis(inRange, stats),
-    series: timeSeries(inRange, bucketMs, from, now),
-    heatmap: heatmapByDayHour(inRange),
+    source,
+    kpis: current.kpis,
+    change: kpiChange,
+    coverage: currentCoverage,
+    series,
+    heatmap,
     steps,
-    findings: [...flowFindings(data, from, now), ...findings(steps, inRange, (now - from) / DAY, caps?.settings ?? null, caps)].sort((a, b) => RANK[a.severity] - RANK[b.severity]),
-    gaps: gaps.filter(([a, b]) => b > from && a < now),
+    findings: insights({
+      now,
+      from,
+      to: now,
+      steps,
+      logs: inRange,
+      rollups: history.rollups,
+      jobs: data.jobs,
+      flowRuns: data.flowRunsBetween(from, now),
+      flowEvents: data.flowEvents,
+      settings: caps?.settings ?? null,
+      canReadTraceText: caps?.canReadTraceText ?? null,
+      gaps: collectedGaps,
+      ...(thresholds ? { thresholds } : {}),
+    }),
+    gaps: rangeGaps,
     oldest,
+    platform: { ...summarizePlatformStats(history.pluginStats ?? [], from, now), canRead: caps?.canReadPluginStats ?? null },
   };
 }
