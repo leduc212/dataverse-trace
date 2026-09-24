@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, parseFilter, parseRequest, project, sortRows } from './odata.ts';
+import { evaluate, evaluateKnown, parseFilter, parseRequest, project, referencedFields, sortRows } from './odata.ts';
 
 const row = {
   id: '11111111-2222-3333-4444-555555555555',
@@ -29,9 +29,36 @@ describe('parseFilter + evaluate', () => {
     ["Microsoft.Dynamics.CRM.In(PropertyName='mode',PropertyValues=[2,3])", false],
   ])('%s → %s', (filter, expected) => expect(evaluate(parseFilter(filter), row)).toBe(expected));
 
+  it.each([
+    ["contains(name,'brie')", true],
+    ["startswith(name,'o''b')", true],
+    ["endswith(name,'X')", false],
+    ["not contains(name,'zzz') and mode eq 1", true],
+    ["parent/name eq 'Contoso'", true],
+    ["parent/missing eq null", true],
+  ])('supports functions and lookup paths: %s → %s', (filter, expected) =>
+    expect(evaluate(parseFilter(filter), { ...row, parent: { name: 'Contoso' } })).toBe(expected),
+  );
+
   it('rejects unsupported syntax', () => {
-    expect(() => parseFilter('contains(name,"x")')).toThrow();
+    expect(() => parseFilter('substringof(name,"x")')).toThrow();
     expect(() => parseFilter('mode has 1')).toThrow('Unsupported operator');
+  });
+});
+
+describe('evaluateKnown (flow trigger filters against a partial record)', () => {
+  it('evaluates when every field it reads is known', () => {
+    expect(evaluateKnown('hbr_premium gt 1000 and statecode eq 0', { hbr_premium: 1500, statecode: 0 })).toEqual({ result: true, missing: [] });
+    expect(evaluateKnown('hbr_premium gt 1000', { hbr_premium: 200 }).result).toBe(false);
+  });
+
+  it("says 'unknown' instead of guessing when a field isn't known, or the filter can't be parsed", () => {
+    expect(evaluateKnown('hbr_premium gt 1000 and statecode eq 0', { hbr_premium: 1500 })).toEqual({ result: 'unknown', missing: ['statecode'] });
+    expect(evaluateKnown('substringof(name, x)', {}).result).toBe('unknown');
+  });
+
+  it('lists referenced fields once', () => {
+    expect(referencedFields(parseFilter("a eq 1 or (a eq 2 and contains(b,'x'))"))).toEqual(['a', 'b']);
   });
 });
 

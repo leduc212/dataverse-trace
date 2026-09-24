@@ -29,6 +29,18 @@ describe('FetchTransport', () => {
     expect(headers['Prefer']).toBe('odata.include-annotations="*",odata.maxpagesize=500');
   });
 
+  it('sends PATCH as update-only JSON (If-Match: *)', async () => {
+    const { fn, calls } = fakeFetch([() => new Response(null, { status: 204 })]);
+    await new FetchTransport({ origin: ORIGIN, fetch: fn }).patch('organizations(0f5c2a1e-7b3d-4c9e-8a21-6d4f0b9c3e71)', { plugintracelogsetting: 2 });
+    const init = calls[0]!.init!;
+    expect(init.method).toBe('PATCH');
+    expect(init.body).toBe('{"plugintracelogsetting":2}');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['If-Match']).toBe('*');
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['Prefer']).toBeUndefined();
+  });
+
   it('omits the annotations preference when asked', async () => {
     const { fn, calls } = fakeFetch([json({})]);
     await new FetchTransport({ origin: ORIGIN, fetch: fn }).get('WhoAmI', { annotations: false });

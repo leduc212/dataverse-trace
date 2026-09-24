@@ -2,7 +2,7 @@
   "uniqueName": "DataverseTrace",
   "displayName": "Dataverse Trace",
   "description": "Everything that ran when a record was saved, on one timeline. Read-only: web resources only, no plugins, tables or data. Open /WebResources/dvt_/app/index.html in the environment.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": {
     "uniqueName": "dataversetrace",
     "displayName": "Dataverse Trace",

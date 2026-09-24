@@ -12,6 +12,11 @@ export interface RequestOptions {
 export interface Transport {
   /** GET a path relative to `/api/data/v9.2/` (or an absolute `@odata.nextLink`); returns parsed JSON. */
   get<T = unknown>(path: string, options?: RequestOptions): Promise<T>;
+  /**
+   * PATCH a record. The app's only write: switching the trace-log setting during watch mode, after
+   * the user explicitly agrees (and always restoring it).
+   */
+  patch(path: string, body: Record<string, unknown>): Promise<void>;
 }
 
 export interface ODataPage<T> {
@@ -109,16 +114,29 @@ export class FetchTransport implements Transport {
     const prefer: string[] = [];
     if (options.annotations !== false) prefer.push('odata.include-annotations="*"');
     if (options.maxPageSize) prefer.push(`odata.maxpagesize=${options.maxPageSize}`);
+    const response = await this.#send('GET', path, undefined, prefer, options.signal);
+    return (await response.json()) as T;
+  }
+
+  async patch(path: string, body: Record<string, unknown>): Promise<void> {
+    await this.#send('PATCH', path, body, [], undefined);
+  }
+
+  async #send(method: 'GET' | 'PATCH', path: string, body: Record<string, unknown> | undefined, prefer: string[], signal: AbortSignal | undefined): Promise<Response> {
     const headers: Record<string, string> = { Accept: 'application/json', 'OData-Version': '4.0', 'OData-MaxVersion': '4.0' };
     if (prefer.length) headers['Prefer'] = prefer.join(',');
+    if (body) headers['Content-Type'] = 'application/json';
+    // PATCH to a record id must never create one: If-Match: * makes it update-only.
+    if (method === 'PATCH') headers['If-Match'] = '*';
     const url = this.#url(path);
 
     for (let attempt = 0; ; attempt++) {
       await this.#acquire();
       let response: Response;
       try {
-        const init: RequestInit = { credentials: 'same-origin', headers };
-        if (options.signal) init.signal = options.signal;
+        const init: RequestInit = { method, credentials: 'same-origin', headers };
+        if (body) init.body = JSON.stringify(body);
+        if (signal) init.signal = signal;
         response = await this.#fetch(url, init);
       } finally {
         this.#release();
@@ -128,22 +146,22 @@ export class FetchTransport implements Transport {
         const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 300) * 1000 : 2 ** attempt * 1000;
         this.#onThrottle?.(waitMs);
         await this.#sleep(waitMs);
-        options.signal?.throwIfAborted();
+        signal?.throwIfAborted();
         continue;
       }
       if (!response.ok) {
         let message = `${response.status} ${response.statusText}`.trim();
         let code: string | undefined;
         try {
-          const body = (await response.json()) as { error?: { message?: string; code?: string } };
-          if (body.error?.message) message = body.error.message;
-          code = body.error?.code;
+          const err = (await response.json()) as { error?: { message?: string; code?: string } };
+          if (err.error?.message) message = err.error.message;
+          code = err.error?.code;
         } catch {
           // Not JSON; keep the status line.
         }
         throw new HttpError(response.status, message, code);
       }
-      return (await response.json()) as T;
+      return response;
     }
   }
 }

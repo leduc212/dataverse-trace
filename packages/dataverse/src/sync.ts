@@ -4,15 +4,19 @@
 //  steps      – registrations for step ids seen in trace logs and system jobs, refreshed every 6 h
 //  asyncOps   – incremental on modifiedon (jobs change state after they're created), 7-day lookback
 //  traceBlobs – trace text in a separate, slower lane; skipped when the user can't read it
+//  flowRuns   – cloud flow runs, incremental on modifiedon, 7-day lookback
+//  flowEvents – flow run ingestion gap signals
+//  processes  – workflows, business rules and flow definitions (with triggers), refreshed every 6 h
 //
 // The platform deletes trace logs older than ~24 h. If more than 24 h passed since the last
 // successful trace-log sync, the gap is recorded so charts can shade it instead of showing a dip.
-import type { AsyncOperationRecord, StepRegistration, TraceBlob, TraceLogRecord } from '@dvt/core';
-import { mapAsyncOperation, mapStep, mapTraceBlob, mapTraceLog, type Raw } from './mappers.ts';
-import { asyncOperationsQuery, stepsByIdQuery, traceBlobsQuery, traceLogsQuery } from './queries.ts';
-import { pages, type Transport } from './transport.ts';
+import { annotateSubscriptions, type TriggerSubscription } from '@dvt/core';
+import type { AsyncOperationRecord, FlowEventRecord, FlowRunRecord, ProcessDefinition, StepRegistration, TraceBlob, TraceLogRecord } from '@dvt/core';
+import { mapAsyncOperation, mapCallbackRegistration, mapFlowEvent, mapFlowRun, mapProcesses, mapStep, mapTraceBlob, mapTraceLog, type Raw } from './mappers.ts';
+import { asyncOperationsQuery, callbackRegistrationsQuery, flowDefinitionsQuery, flowEventsQuery, flowRunsQuery, processesQuery, stepsByIdQuery, traceBlobsQuery, traceLogsQuery } from './queries.ts';
+import { getAll, pages, type Transport } from './transport.ts';
 
-export type SourceName = 'traceLogs' | 'steps' | 'asyncOps' | 'traceBlobs';
+export type SourceName = 'traceLogs' | 'steps' | 'asyncOps' | 'traceBlobs' | 'flowRuns' | 'flowEvents' | 'processes';
 
 export interface SourceState {
   source: SourceName;
@@ -33,6 +37,10 @@ export interface SyncStore {
   putTraceBlobs(rows: TraceBlob[]): Promise<void>;
   putAsyncOperations(rows: AsyncOperationRecord[]): Promise<void>;
   putSteps(rows: StepRegistration[]): Promise<void>;
+  putFlowRuns(rows: FlowRunRecord[]): Promise<void>;
+  putFlowEvents(rows: FlowEventRecord[]): Promise<void>;
+  /** Replaces all process definitions. */
+  replaceProcesses(rows: ProcessDefinition[]): Promise<void>;
   /** Step ids referenced by stored trace logs and system jobs. */
   referencedStepIds(): Promise<Set<string>>;
   knownStepIds(): Promise<Set<string>>;
@@ -56,6 +64,8 @@ export interface SyncOptions {
   store: SyncStore;
   /** Whether trace text can be read (from the capability probe). `false` skips the blob lane. */
   canReadTraceText?: () => boolean | null;
+  /** Whether a source can be read at all. `false` skips it instead of failing. */
+  canRead?: (source: SourceName) => boolean | null;
   now?: () => number;
   onProgress?: (p: SyncProgress) => void;
   asyncLookbackMs?: number;
@@ -92,7 +102,7 @@ const emptyState = (source: SourceName): SourceState => ({
 });
 
 export class SyncEngine {
-  readonly #o: Required<Omit<SyncOptions, 'onProgress' | 'canReadTraceText'>> & Pick<SyncOptions, 'onProgress' | 'canReadTraceText'>;
+  readonly #o: Required<Omit<SyncOptions, 'onProgress' | 'canReadTraceText' | 'canRead'>> & Pick<SyncOptions, 'onProgress' | 'canReadTraceText' | 'canRead'>;
 
   constructor(options: SyncOptions) {
     this.#o = {
@@ -110,6 +120,11 @@ export class SyncEngine {
 
   async #run(source: SourceName, work: (state: SourceState, progress: (n: number) => void) => Promise<number | 'skipped'>): Promise<SyncProgress> {
     const { store, now } = this.#o;
+    if (this.#o.canRead?.(source) === false) {
+      const p: SyncProgress = { source, phase: 'skipped', fetched: 0, message: 'no read access' };
+      this.#emit(p);
+      return p;
+    }
     const state = (await store.getSourceState(source)) ?? emptyState(source);
     state.lastRunAt = now();
     let fetched = 0;
@@ -213,6 +228,67 @@ export class SyncEngine {
     });
   }
 
+  syncFlowRuns(signal?: AbortSignal): Promise<SyncProgress> {
+    return this.#run('flowRuns', async (state, progress) => {
+      const { transport, store, now } = this.#o;
+      const since = state.watermark ?? now() - this.#o.asyncLookbackMs;
+      const options = signal ? { maxPageSize: this.#o.metadataPageSize, signal } : { maxPageSize: this.#o.metadataPageSize };
+      for await (const page of pages<Raw>(transport, flowRunsQuery(since), options)) {
+        const rows = page.map(mapFlowRun);
+        await store.putFlowRuns(rows);
+        state.watermark = Math.max(state.watermark ?? since, ...rows.map((r) => r.modifiedOn));
+        await store.putSourceState(state);
+        progress(rows.length);
+      }
+      return 0;
+    });
+  }
+
+  syncFlowEvents(signal?: AbortSignal): Promise<SyncProgress> {
+    return this.#run('flowEvents', async (state, progress) => {
+      const { transport, store, now } = this.#o;
+      const since = state.watermark ?? now() - this.#o.asyncLookbackMs;
+      const options = signal ? { signal } : {};
+      for await (const page of pages<Raw>(transport, flowEventsQuery(since), options)) {
+        const rows = page.map(mapFlowEvent);
+        await store.putFlowEvents(rows);
+        state.watermark = Math.max(state.watermark ?? since, ...rows.map((r) => r.createdOn));
+        await store.putSourceState(state);
+        progress(rows.length);
+      }
+      return 0;
+    });
+  }
+
+  /** Classic workflows, business rules and cloud flows with their triggers. Refreshed every 6 hours. */
+  syncProcesses(signal?: AbortSignal, force = false): Promise<SyncProgress> {
+    return this.#run('processes', async (state, progress) => {
+      const { transport, store, now } = this.#o;
+      if (!force && state.lastOkAt !== null && now() - state.lastOkAt < STEP_REFRESH_MS) return 0;
+      const options = signal ? { signal } : {};
+      const rows = await getAll<Raw>(transport, processesQuery(), options);
+      const clientdata = new Map<string, unknown>();
+      try {
+        for (const row of await getAll<Raw>(transport, flowDefinitionsQuery(), { ...options, maxPageSize: 50 })) {
+          clientdata.set(String(row['workflowid']).toLowerCase(), row['clientdata']);
+        }
+      } catch {
+        // Without flow definitions, flows are listed with unknown triggers.
+      }
+      // Live trigger subscriptions: flows whose trigger isn't registered won't fire. Unreadable = not checked.
+      let subscriptions: TriggerSubscription[] | null = null;
+      try {
+        subscriptions = (await getAll<Raw>(transport, callbackRegistrationsQuery(), options)).map(mapCallbackRegistration).filter((s): s is TriggerSubscription => s !== null);
+      } catch {
+        subscriptions = null;
+      }
+      const processes = annotateSubscriptions(mapProcesses(rows, clientdata), subscriptions);
+      await store.replaceProcesses(processes);
+      progress(processes.length);
+      return 0;
+    });
+  }
+
   /** Runs every source in dependency order. Errors in one source don't stop the others. */
   async syncAll(signal?: AbortSignal): Promise<SyncReport> {
     const startedAt = this.#o.now();
@@ -220,6 +296,9 @@ export class SyncEngine {
     results.push(await this.syncTraceLogs(signal));
     results.push(await this.syncAsyncOperations(signal));
     results.push(await this.syncSteps(signal));
+    results.push(await this.syncFlowRuns(signal));
+    results.push(await this.syncFlowEvents(signal));
+    results.push(await this.syncProcesses(signal));
     results.push(await this.syncTraceBlobs(signal));
     return { startedAt, finishedAt: this.#o.now(), results };
   }

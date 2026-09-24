@@ -78,6 +78,14 @@ describe('buildSolutionZip', () => {
     expect(solution).toContain('<Managed>0</Managed>');
   });
 
+  it('builds a managed package that differs only in the Managed flag', () => {
+    const managed = unzipSync(buildSolutionZip(config, files, { managed: true }));
+    const unmanaged = unzipSync(buildSolutionZip(config, files));
+    expect(strFromU8(managed['solution.xml']!)).toContain('<Managed>1</Managed>');
+    expect(strFromU8(managed['solution.xml']!).replace('<Managed>1</Managed>', '<Managed>0</Managed>')).toBe(strFromU8(unmanaged['solution.xml']!));
+    expect(strFromU8(managed['customizations.xml']!)).toBe(strFromU8(unmanaged['customizations.xml']!));
+  });
+
   it('escapes XML in metadata', () => {
     const solution = strFromU8(unzipSync(buildSolutionZip(config, files))['solution.xml']!);
     expect(solution).toContain('description="Dataverse Trace &lt;test&gt; &amp; co"');

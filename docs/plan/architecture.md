@@ -196,6 +196,8 @@ Candidates are correlations whose depth-1 request has `table` = the record's tab
 
 **I3: a flow run causes downstream Dataverse operations** (P2, only if spike S9 shows no exact identity is available). Correlations whose depth-1 request starts inside a flow run's window, on a table the flow's actions write to (parsed from `clientdata`). Off by default.
 
+**As built in v0.2** (engineering §8 lists the differences): I1 and I2 use the weights above. Saves **of the same record** and runs are paired one-to-one, best score first. Saves of other records are known only through their plug-in operations (a record story reads one record's audit), so instead of pairing, a run is discounted by its share of those saves shortly before it. A flow whose trigger has no matching live `callbackregistration` is marked "can't tell", with the reason. Low-confidence links are shown with their percentage rather than hidden. Measured against the demo generator's ground truth (every flow run knows which save triggered it; 14 days, the first 1,500 records): links at **0.8 or more were 567/567 correct, 0.5 to 0.8 were 1,887/1,887, and under 0.5 were 412/512 (80 %)**. The demo's delays are synthetic, so these numbers show the rules behave sensibly, not how they'll do in a real environment. A test keeps them from regressing (`packages/demo/src/generator.test.ts`).
+
 **Calibration.** The weights above are starting values. Environments that use the NuGet helper (R8) produce **ground-truth** record links, so a labelled fixture set can be captured there and the inferred rules measured against it for precision and recall at each confidence bucket. The numbers are published in the docs. Honest calibration is part of the pitch.
 
 ### Assembling a trace

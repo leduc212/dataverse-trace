@@ -14,14 +14,19 @@ import {
   TabList,
   Tooltip,
 } from '@fluentui/react-components';
-import { ArrowSyncRegular, CheckmarkCircleRegular, DarkThemeRegular, DismissRegular, ErrorCircleRegular } from '@fluentui/react-icons';
+import { ArrowSyncRegular, CheckmarkCircleRegular, DarkThemeRegular, DismissRegular, DocumentArrowUpRegular, ErrorCircleRegular } from '@fluentui/react-icons';
 import { useState, type ReactNode } from 'react';
 import { getClient, useStatus } from './client.ts';
 import { formatAgo } from './format.ts';
+import { Tour, startTour, useFirstVisitTour } from './components/Tour.tsx';
 import { DashboardPage } from './pages/DashboardPage.tsx';
+import { ExpectedPage } from './pages/ExpectedPage.tsx';
 import { ExplorerPage } from './pages/ExplorerPage.tsx';
+import { RecordPage } from './pages/RecordPage.tsx';
+import { SessionPage } from './pages/SessionPage.tsx';
 import { StatusPage } from './pages/StatusPage.tsx';
 import { TracePage } from './pages/TracePage.tsx';
+import { WatchPage } from './pages/WatchPage.tsx';
 import { href, navigate, useRoute, type Page } from './router.ts';
 import type { Status } from './shared/api.ts';
 import type { ThemePreference } from './theme.ts';
@@ -86,7 +91,10 @@ function Banners({ status }: { status: Status }) {
           <a className="link" href={REPO_URL} target="_blank" rel="noreferrer">
             GitHub
           </a>{' '}
-          and open it inside Dataverse.
+          and open it inside Dataverse.{' '}
+          <button className="link" onClick={startTour}>
+            Take the tour
+          </button>
         </>
       ),
     });
@@ -125,11 +133,15 @@ export function App({ themePreference, onThemeChange }: AppProps) {
   const route = useRoute();
   if (route.page === 'explorer') lastExplorerHash = location.hash || href('explorer');
 
-  const tabFor = (page: Page): Page => (page === 'trace' ? 'explorer' : page);
+  useFirstVisitTour(status?.ready === true && status.host?.kind === 'demo');
+  const tabFor = (page: Page): Page | 'none' => (page === 'trace' ? 'explorer' : page === 'session' ? 'none' : page);
   const envLabel = status?.host?.kind === 'environment' ? status.host.envKey : 'Harbor Insurance (fictional)';
 
   let content: ReactNode;
-  if (!status?.ready) {
+  if (route.page === 'session') {
+    // Imported sessions don't need the environment (or the worker) at all.
+    content = <SessionPage />;
+  } else if (!status?.ready) {
     content = (
       <div className="loading-screen">
         <Spinner label={status?.host?.kind === 'environment' ? `Connecting to ${envLabel}…` : 'Preparing the demo…'} />
@@ -137,6 +149,12 @@ export function App({ themePreference, onThemeChange }: AppProps) {
     );
   } else if (route.page === 'trace' && route.id) {
     content = <TracePage correlationId={route.id} />;
+  } else if (route.page === 'record') {
+    content = <RecordPage recordKey={route.id} saveId={route.params.get('save')} />;
+  } else if (route.page === 'expected') {
+    content = <ExpectedPage />;
+  } else if (route.page === 'watch') {
+    content = <WatchPage />;
   } else if (route.page === 'dashboard') {
     content = <DashboardPage />;
   } else if (route.page === 'status') {
@@ -158,6 +176,12 @@ export function App({ themePreference, onThemeChange }: AppProps) {
           onTabSelect={(_, d) => navigate(d.value === 'explorer' ? lastExplorerHash : href(d.value as Page))}
         >
           <Tab value="explorer">Explorer</Tab>
+          <Tab value="record">Records</Tab>
+          <Tab value="watch">
+            Watch
+            {status?.watch.phase === 'watching' && <span className="live-dot-small" aria-label="watching" />}
+          </Tab>
+          <Tab value="expected">Expected</Tab>
           <Tab value="dashboard">Dashboard</Tab>
           <Tab value="status">Status</Tab>
         </TabList>
@@ -169,6 +193,9 @@ export function App({ themePreference, onThemeChange }: AppProps) {
           <span className="env-name" title={envLabel}>
             {envLabel}
           </span>
+          <Tooltip content="Open a shared session file (.dvtrace.json)" relationship="label">
+            <Button appearance="subtle" size="small" icon={<DocumentArrowUpRegular />} onClick={() => navigate(href('session'))} />
+          </Tooltip>
           {status?.ready && <SyncChip status={status} />}
           {status?.ready && (
             <Tooltip content="Sync now" relationship="label">
@@ -199,6 +226,7 @@ export function App({ themePreference, onThemeChange }: AppProps) {
       </header>
       {status?.ready ? <Banners status={status} /> : <div />}
       {content}
+      <Tour />
     </div>
   );
 }

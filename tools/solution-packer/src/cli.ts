@@ -3,7 +3,9 @@
 // solution.config.json = SolutionConfig plus:
 //   "distDir":  folder with the built files (relative to the config file)
 //   "webResourceRoot": name prefix for every file, e.g. "dvt_/spike/"
-//   "outDir":   where the zip goes (relative to the config file)
+//   "outDir":   where the zips go (relative to the config file)
+//
+// Writes <UniqueName>_<version>.zip (unmanaged) and <UniqueName>_<version>_managed.zip.
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -39,12 +41,15 @@ const files: WebResourceFile[] = listFiles(distDir).map((full) => ({
 }));
 
 try {
-  const zip = buildSolutionZip(config, files);
   const outDir = resolve(baseDir, config.outDir);
   mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, `${config.uniqueName}_${config.version.replace(/\./g, '_')}.zip`);
-  writeFileSync(outFile, zip);
-  console.log(`Packed ${files.length} web resources into ${relative(process.cwd(), outFile)} (${zip.byteLength} bytes):`);
+  const base = join(outDir, `${config.uniqueName}_${config.version.replace(/\./g, '_')}`);
+  for (const managed of [false, true]) {
+    const zip = buildSolutionZip(config, files, { managed });
+    const outFile = `${base}${managed ? '_managed' : ''}.zip`;
+    writeFileSync(outFile, zip);
+    console.log(`Packed ${files.length} web resources into ${relative(process.cwd(), outFile)} (${zip.byteLength} bytes)`);
+  }
   for (const f of files.sort((a, b) => a.name.localeCompare(b.name))) {
     console.log(`  ${f.name.padEnd(48)} ${String(f.bytes.byteLength).padStart(9)} B`);
   }

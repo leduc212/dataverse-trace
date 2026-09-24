@@ -78,8 +78,44 @@ export function findings(steps: DashboardStep[], logs: readonly TraceLogRecord[]
   if (caps?.canReadTraceText === false) {
     out.push({ id: 'no-text', severity: 'info', title: 'Trace text is hidden', detail: 'Only System Administrators can read trace text, so text search covers exceptions and names only.' });
   }
-  const rank = { critical: 0, warning: 1, info: 2 } as const;
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return out.sort((a, b) => RANK[a.severity] - RANK[b.severity]);
+}
+
+const RANK = { critical: 0, warning: 1, info: 2 } as const;
+
+/** Cloud flow findings: failing flows, and gaps in flow run history. */
+export function flowFindings(data: Dataset, from: number, now: number): Finding[] {
+  const out: Finding[] = [];
+  const runs = data.flowRunsBetween(from, now);
+  const byFlow = new Map<string, { name: string; total: number; failed: number }>();
+  for (const r of runs) {
+    const key = r.workflowId ?? r.flowName ?? 'unknown';
+    const s = byFlow.get(key) ?? { name: r.flowName ?? 'Unnamed flow', total: 0, failed: 0 };
+    s.total++;
+    if (r.status === 'failed') s.failed++;
+    byFlow.set(key, s);
+  }
+  for (const [key, s] of byFlow) {
+    const rate = s.failed / s.total;
+    if (s.failed >= 5 && rate >= 0.03) {
+      out.push({
+        id: `flow-errors:${key}`,
+        severity: rate >= 0.2 ? 'critical' : 'warning',
+        title: `Cloud flow "${s.name}" fails ${formatPercent(rate)} of the time`,
+        detail: `${s.failed.toLocaleString('en-US')} of ${s.total.toLocaleString('en-US')} runs failed. Open a failed run's record story to see what triggered it.`,
+      });
+    }
+  }
+  const gaps = data.flowEvents.filter((e) => e.eventType === 'FlowRunIngestion' && e.createdOn >= from && e.createdOn <= now);
+  if (gaps.length) {
+    out.push({
+      id: 'flow-gaps',
+      severity: 'info',
+      title: 'Flow run history may be incomplete',
+      detail: `Dataverse reported ${gaps.length} flow-run ingestion problem${gaps.length === 1 ? '' : 's'} in this range${gaps[0]!.name ? ` ("${gaps[0]!.name}")` : ''}, so some runs may be missing and flow links may be absent.`,
+    });
+  }
+  return out;
 }
 
 export function dashboard(data: Dataset, range: RangeKey, now: number, caps: Capabilities | null, gaps: Array<[number, number]>): DashboardData {
@@ -121,7 +157,7 @@ export function dashboard(data: Dataset, range: RangeKey, now: number, caps: Cap
     series: timeSeries(inRange, bucketMs, from, now),
     heatmap: heatmapByDayHour(inRange),
     steps,
-    findings: findings(steps, inRange, (now - from) / DAY, caps?.settings ?? null, caps),
+    findings: [...flowFindings(data, from, now), ...findings(steps, inRange, (now - from) / DAY, caps?.settings ?? null, caps)].sort((a, b) => RANK[a.severity] - RANK[b.severity]),
     gaps: gaps.filter(([a, b]) => b > from && a < now),
     oldest,
   };

@@ -3,9 +3,13 @@
 //   #/trace/<correlationId>
 //   #/dashboard?r=7d
 //   #/status
+//   #/record/<table>/<id>?save=<saveId>   (#/record alone: pick a record)
+//   #/expected?t=<table>&c=update&cols=a,b
+//   #/watch
+//   #/session                              (open a .dvtrace.json file)
 import { useSyncExternalStore } from 'react';
 
-export type Page = 'explorer' | 'trace' | 'dashboard' | 'status';
+export type Page = 'explorer' | 'trace' | 'dashboard' | 'status' | 'record' | 'expected' | 'watch' | 'session';
 
 export interface Route {
   page: Page;
@@ -20,6 +24,14 @@ export function parseHash(hash: string): Route {
   switch (page) {
     case 'trace':
       return { page: 'trace', id: id ? decodeURIComponent(id) : null, params };
+    case 'record': {
+      // "table/id" (both parts kept, so the id carries the table).
+      const rest = path.split('/').slice(1).map(decodeURIComponent);
+      return { page: 'record', id: rest.length >= 2 && rest[0] && rest[1] ? `${rest[0]}/${rest[1]}` : null, params };
+    }
+    case 'expected':
+    case 'watch':
+    case 'session':
     case 'dashboard':
     case 'status':
     case 'explorer':
@@ -33,7 +45,8 @@ export function href(page: Page, params: Record<string, string | undefined> = {}
   const search = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') search.set(k, v);
   const qs = search.toString();
-  return `#/${page}${id ? `/${encodeURIComponent(id)}` : ''}${qs ? `?${qs}` : ''}`;
+  const path = id ? `/${id.split('/').map(encodeURIComponent).join('/')}` : '';
+  return `#/${page}${path}${qs ? `?${qs}` : ''}`;
 }
 
 export function navigate(target: string, replace = false): void {

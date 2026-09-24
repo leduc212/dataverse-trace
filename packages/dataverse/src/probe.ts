@@ -22,6 +22,10 @@ export interface Capabilities {
   isSystemAdministrator: boolean | null;
   canReadAsyncOperations: boolean;
   canReadSteps: boolean;
+  canReadFlowRuns: boolean;
+  canReadProcesses: boolean;
+  /** Needs prvReadAuditSummary (and auditing turned on to be useful). */
+  canReadAudit: boolean;
   /** Human-readable explanations for anything missing. */
   notes: string[];
   checkedAt: number;
@@ -88,14 +92,21 @@ export async function probeCapabilities(transport: Transport, now: () => number 
     notes.push('Plug-in trace logging is set to Exceptions: only failing executions are logged.');
   }
 
-  const [traceLogs, asyncOps, steps] = await Promise.all([
+  const [traceLogs, asyncOps, steps, flowRuns, processes, audit] = await Promise.all([
     canRead(transport, 'plugintracelogs?$select=plugintracelogid&$top=1'),
     canRead(transport, 'asyncoperations?$select=asyncoperationid&$top=1'),
     canRead(transport, 'sdkmessageprocessingsteps?$select=sdkmessageprocessingstepid&$top=1'),
+    canRead(transport, 'flowruns?$select=flowrunid&$top=1'),
+    canRead(transport, 'workflows?$select=workflowid&$top=1'),
+    canRead(transport, 'audits?$select=auditid&$top=1'),
   ]);
   if (!traceLogs.ok) notes.push(`Can't read plug-in trace logs (${traceLogs.why}).`);
   if (!asyncOps.ok) notes.push(`Can't read system jobs (${asyncOps.why}); the async lane will be limited.`);
   if (!steps.ok) notes.push(`Can't read plug-in step registrations (${steps.why}); stage and order will be unknown.`);
+  if (!flowRuns.ok) notes.push(`Can't read cloud flow run history (${flowRuns.why}); record stories won't include flows.`);
+  if (!processes.ok) notes.push(`Can't read processes (${processes.why}); expected vs. actual won't include flows and workflows.`);
+  if (!audit.ok) notes.push(`Can't read audit history (${audit.why}); record stories will rely on system jobs only.`);
+  else if (settings.isAuditEnabled === false) notes.push('Auditing is off for this environment, so record stories can only find saves that started system jobs.');
 
   const admin = userId ? await isSystemAdministrator(transport, userId) : null;
   let canReadTraceText: boolean | null = admin;
@@ -121,6 +132,9 @@ export async function probeCapabilities(transport: Transport, now: () => number 
     isSystemAdministrator: admin,
     canReadAsyncOperations: asyncOps.ok,
     canReadSteps: steps.ok,
+    canReadFlowRuns: flowRuns.ok,
+    canReadProcesses: processes.ok,
+    canReadAudit: audit.ok,
     notes,
     checkedAt: now(),
   };

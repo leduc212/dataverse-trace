@@ -819,3 +819,228 @@ table.data th.num {
   place-items: center;
   height: 100%;
 }
+
+/* ── v0.2: flows, saves, inferred links ─────────────────────────────────── */
+.wf-bar.flow {
+  background: var(--viz-series-2);
+}
+/* Inferred links: dashed outline and a lighter fill, so they never read as exact. */
+.wf-bar.inferred {
+  opacity: 0.75;
+  outline: 1.5px dashed var(--colorNeutralForeground2);
+  outline-offset: 1px;
+}
+.wf-queue.delay {
+  background: none;
+  border: none;
+  border-top: 1px dashed var(--colorNeutralStroke1);
+  top: 15px;
+  height: 0;
+}
+.wf-kind.diamond {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+.wf-save {
+  position: absolute;
+  top: 9px;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  background: var(--colorNeutralForeground1);
+  box-shadow: 0 0 0 2px var(--colorNeutralBackground1);
+}
+ul.evidence {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--colorNeutralForeground2);
+}
+ul.evidence li.against {
+  color: var(--colorPaletteRedForeground1);
+}
+ul.evidence li.neutral {
+  color: var(--colorNeutralForeground3);
+}
+.nowrap {
+  white-space: nowrap;
+}
+
+/* record story */
+.record-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 8px;
+}
+.save-list-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.save-list {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+}
+.save-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--borderRadiusMedium);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.save-item:hover {
+  background: var(--colorSubtleBackgroundHover);
+}
+.save-item.selected {
+  background: var(--colorBrandBackground2);
+  border-color: var(--colorBrandStroke2);
+}
+.save-diamond {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 0 2px;
+  transform: rotate(45deg);
+  background: var(--colorNeutralForeground1);
+}
+.story {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* expected vs. actual */
+.tri {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tri.yes {
+  color: var(--colorPaletteGreenForeground1);
+}
+.tri.miss {
+  color: var(--colorPaletteRedForeground1);
+  font-weight: 600;
+}
+.tri.no,
+.tri.unknown {
+  color: var(--colorNeutralForeground3);
+}
+table.data.expected tr.miss td {
+  background: var(--colorPaletteRedBackground1);
+}
+table.data.expected tr.dim td {
+  color: var(--colorNeutralForeground3);
+}
+.picker table.data {
+  margin-top: 4px;
+}
+
+/* export and import */
+.export-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.export-preview {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  font-family: var(--fontFamilyMonospace);
+  font-size: 11px;
+  background: var(--colorNeutralBackground3);
+  border-radius: var(--borderRadiusMedium);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.drop-zone {
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+}
+.drop-zone.dragging {
+  border-color: var(--colorBrandStroke1);
+  background: var(--colorBrandBackground2);
+}
+
+/* watch */
+.live-dot-small {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--colorPaletteRedBackground3);
+  vertical-align: middle;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .live-dot,
+  .live-dot-small {
+    animation: dvt-pulse 1.6s ease-in-out infinite;
+  }
+}
+@keyframes dvt-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* tour */
+.tour {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 50;
+  width: min(360px, calc(100vw - 32px));
+  padding: 10px 14px 12px;
+  box-shadow: var(--shadow16);
+}
+.tour-title {
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+@media (max-width: 760px) {
+  .record-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .save-list {
+    max-height: 180px;
+  }
+  .export-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The timeline keeps its space when the card is short; the legend shrinks and scrolls first. */
+.wf-scroll {
+  flex: 1 1 auto;
+  min-height: 150px;
+}
+.wf-legend {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.caveats ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.caveats li + li {
+  margin-top: 2px;
+}

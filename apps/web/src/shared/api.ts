@@ -2,9 +2,14 @@
 // storage, filtering, correlation and statistics. Everything crossing it must be structured-cloneable.
 import type {
   AsyncOperationRecord,
+  ChangeKind,
+  ExpectedItem,
   Heatmap,
   Kpis,
   OperationSummary,
+  RecordRef,
+  RecordStory,
+  SaveEvent,
   StepRegistration,
   StepStats,
   TimeBucket,
@@ -34,6 +39,97 @@ export interface Status {
   error: string | null;
   /** Increases whenever the loaded data changes, so views know to refresh. */
   dataVersion: number;
+  watch: WatchStatus;
+}
+
+// ── v0.2: record story, expected vs. actual, watch mode ─────────────────────
+
+export interface RecordInfo {
+  table: string;
+  id: string;
+  name: string | null;
+  /** Current column values, or null when the record couldn't be read. */
+  values: Record<string, unknown> | null;
+  /** Why the record couldn't be read (deleted, no access, unknown table). */
+  error: string | null;
+}
+
+export interface RecentRecord {
+  table: string;
+  id: string;
+  name: string | null;
+  lastSeen: number;
+  source: 'systemJob' | 'watch' | 'search';
+}
+
+export interface RecordSaves {
+  record: RecordInfo;
+  /** Newest first. */
+  saves: SaveEvent[];
+  /** How audit history could be read. */
+  audit: 'ok' | 'unreadable' | 'off' | 'error';
+  auditNote: string | null;
+}
+
+export interface RecordStoryView {
+  story: RecordStory;
+  layout: WaterfallLayout;
+  steps: Record<string, StepRegistration>;
+  expected: ExpectedItem[];
+  expectedNote: string | null;
+}
+
+export interface ExpectedRequest {
+  table: string;
+  change: ChangeKind;
+  /** null = not known (every filtered step is "unknown"). */
+  changedColumns: string[] | null;
+  /** Current values for flow filter expressions. */
+  recordValues?: Record<string, unknown>;
+}
+
+export interface ExpectedResult {
+  items: ExpectedItem[];
+  note: string | null;
+  /** Columns that decide whether something runs (filtering attributes, trigger columns). */
+  columns: string[];
+}
+
+export interface WatchStatus {
+  phase: 'idle' | 'watching';
+  record: RecordRef | null;
+  startedAt: number | null;
+  stoppedAt: number | null;
+  /** When new rows last arrived. */
+  lastNewAt: number | null;
+  /** Watch stops by itself at this time unless new rows arrive. */
+  idleStopAt: number | null;
+  polls: number;
+  requests: number;
+  /** Set when the trace setting was switched to All for the session. */
+  traceSwitch: { from: 0 | 1 | 2; organizationId: string; restored: boolean } | null;
+  stopReason: 'user' | 'idle' | 'limit' | null;
+  /** Informational message, e.g. about restoring the trace setting. */
+  note: string | null;
+  error: string | null;
+  /** Demo: simulated saves are available. */
+  canSimulate: boolean;
+}
+
+export interface WatchView {
+  /** Saves of the watched record since the watch started (newest first). */
+  saves: SaveEvent[];
+  /** The newest save's story, once one is seen. */
+  view: RecordStoryView | null;
+  /** What's registered to run on update of this table (ghosts before a save arrives). */
+  expected: ExpectedResult | null;
+}
+
+export interface ExportContext {
+  /** Trace text by span id. */
+  texts: Record<string, string>;
+  /** Names of users that appear in the trace rows (for redaction). */
+  users: string[];
 }
 
 export type RangeKey = '1h' | '24h' | '7d' | '30d' | 'all';
@@ -144,6 +240,18 @@ export interface WorkerApi {
   trace(correlationId: string): Promise<TraceView | null>;
   dashboard(range: RangeKey): Promise<DashboardData>;
   forget(): Promise<void>;
+  // v0.2
+  recentRecords(limit?: number): Promise<RecentRecord[]>;
+  searchRecords(table: string, text: string): Promise<RecentRecord[]>;
+  knownTables(): Promise<string[]>;
+  recordSaves(table: string, id: string): Promise<RecordSaves>;
+  recordStory(table: string, id: string, saveId: string): Promise<RecordStoryView | null>;
+  expected(request: ExpectedRequest): Promise<ExpectedResult>;
+  watchStart(table: string, id: string, options: { switchTrace: boolean; name?: string | null }): Promise<void>;
+  watchStop(): Promise<void>;
+  watchView(): Promise<WatchView>;
+  simulateSave(): Promise<string | null>;
+  exportContext(spanIds: string[]): Promise<ExportContext>;
 }
 
 export const RANGE_MS: Record<RangeKey, number | null> = {

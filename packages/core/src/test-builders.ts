@@ -1,5 +1,5 @@
 // Builders for tests. Not exported from the package index.
-import type { AsyncOperationRecord, StepRegistration, TraceLogRecord } from './records.ts';
+import type { AsyncOperationRecord, AuditRecord, FlowRunRecord, FlowTrigger, ProcessDefinition, StepRegistration, TraceLogRecord } from './records.ts';
 
 export const T0 = Date.UTC(2026, 8, 24, 8, 0, 0);
 
@@ -75,6 +75,74 @@ export function step(p: Partial<StepRegistration> = {}): StepRegistration {
     asyncAutoDelete: false,
     impersonatingUserId: null,
     isManaged: false,
+    ...p,
+  };
+}
+
+export function flowRun(p: Partial<FlowRunRecord> = {}): FlowRunRecord {
+  const id = p.id ?? nextId('run');
+  return {
+    id,
+    runId: `run-name-${id}`,
+    workflowId: 'flow-1',
+    flowName: 'Notify owner',
+    start: T0 + 10_000,
+    end: T0 + 25_000,
+    durationMs: 15_000,
+    status: 'succeeded',
+    statusLabel: 'Succeeded',
+    triggerType: 'Automated',
+    errorCode: null,
+    errorMessage: null,
+    parentRunId: null,
+    createdOn: T0 + 60_000,
+    modifiedOn: T0 + 60_000,
+    ownerId: null,
+    ownerName: null,
+    precision: 's',
+    ...p,
+  };
+}
+
+export function trigger(p: Partial<FlowTrigger> = {}): FlowTrigger {
+  return { table: 'account', changes: ['update'], filteringAttributes: null, filterExpression: null, scope: 4, conditions: [], delayed: false, ...p };
+}
+
+export function flowProcess(p: Partial<ProcessDefinition> = {}): ProcessDefinition {
+  return {
+    id: 'flow-1',
+    name: 'Notify owner',
+    category: 'flow',
+    categoryCode: 5,
+    active: true,
+    primaryEntity: null,
+    mode: null,
+    scope: null,
+    triggerOnCreate: false,
+    triggerOnDelete: false,
+    triggerOnUpdateAttributes: null,
+    activationIds: [],
+    flowTrigger: trigger(),
+    modifiedOn: T0,
+    ...p,
+  };
+}
+
+export function audit(p: Partial<AuditRecord> = {}): AuditRecord {
+  return {
+    id: nextId('audit'),
+    table: 'account',
+    recordId: 'rec-1',
+    operation: 'update',
+    action: 2,
+    actionLabel: 'Update',
+    createdOn: T0 + 50,
+    userId: 'user-1',
+    userName: 'Jamie Ortiz',
+    transactionId: null,
+    changedColumns: ['name'],
+    newValues: { name: 'Contoso' },
+    precision: 's',
     ...p,
   };
 }

@@ -1,7 +1,7 @@
 // Local history: one IndexedDB database per environment. Raw records are the source of truth;
 // spans and statistics are always derived from them, so improving the correlation rules never
 // needs a re-fetch.
-import type { AsyncOperationRecord, StepRegistration, TraceBlob, TraceLogRecord } from '@dvt/core';
+import type { AsyncOperationRecord, FlowEventRecord, FlowRunRecord, ProcessDefinition, StepRegistration, TraceBlob, TraceLogRecord } from '@dvt/core';
 import type { SourceName, SourceState, SyncStore } from '@dvt/dataverse';
 import { Dexie, type Table } from 'dexie';
 
@@ -17,6 +17,9 @@ class TraceDb extends Dexie {
   steps!: Table<StepRegistration, string>;
   sourceState!: Table<SourceState, SourceName>;
   meta!: Table<MetaEntry, string>;
+  flowRuns!: Table<FlowRunRecord, string>;
+  flowEvents!: Table<FlowEventRecord, string>;
+  processes!: Table<ProcessDefinition, string>;
 
   constructor(name: string) {
     super(name);
@@ -28,6 +31,12 @@ class TraceDb extends Dexie {
       sourceState: 'source',
       meta: 'key',
     });
+    // v0.2: cloud flow runs, flow events (gap signals) and process definitions.
+    this.version(2).stores({
+      flowRuns: 'id, start, modifiedOn, workflowId, runId, parentRunId',
+      flowEvents: 'id, createdOn',
+      processes: 'id',
+    });
   }
 }
 
@@ -36,6 +45,8 @@ export interface StorageSummary {
   traceBlobs: number;
   asyncOps: number;
   steps: number;
+  flowRuns: number;
+  processes: number;
   oldest: number | null;
   newest: number | null;
 }
@@ -92,6 +103,21 @@ export class LocalStore implements SyncStore {
     await this.db.steps.bulkPut(rows);
   }
 
+  async putFlowRuns(rows: FlowRunRecord[]): Promise<void> {
+    await this.db.flowRuns.bulkPut(rows);
+  }
+
+  async putFlowEvents(rows: FlowEventRecord[]): Promise<void> {
+    await this.db.flowEvents.bulkPut(rows);
+  }
+
+  async replaceProcesses(rows: ProcessDefinition[]): Promise<void> {
+    await this.db.transaction('rw', this.db.processes, async () => {
+      await this.db.processes.clear();
+      await this.db.processes.bulkPut(rows);
+    });
+  }
+
   async referencedStepIds(): Promise<Set<string>> {
     const [fromLogs, fromJobs] = await Promise.all([
       this.db.traceLogs.orderBy('stepId').uniqueKeys(),
@@ -116,6 +142,18 @@ export class LocalStore implements SyncStore {
 
   allSteps(): Promise<StepRegistration[]> {
     return this.db.steps.toArray();
+  }
+
+  allFlowRuns(): Promise<FlowRunRecord[]> {
+    return this.db.flowRuns.toArray();
+  }
+
+  allFlowEvents(): Promise<FlowEventRecord[]> {
+    return this.db.flowEvents.toArray();
+  }
+
+  allProcesses(): Promise<ProcessDefinition[]> {
+    return this.db.processes.toArray();
   }
 
   traceLogsByCorrelation(correlationId: string): Promise<TraceLogRecord[]> {
@@ -148,25 +186,29 @@ export class LocalStore implements SyncStore {
   }
 
   async summary(): Promise<StorageSummary> {
-    const [traceLogs, traceBlobs, asyncOps, steps, oldest, newest] = await Promise.all([
+    const [traceLogs, traceBlobs, asyncOps, steps, flowRuns, processes, oldest, newest] = await Promise.all([
       this.db.traceLogs.count(),
       this.db.traceBlobs.count(),
       this.db.asyncOps.count(),
       this.db.steps.count(),
+      this.db.flowRuns.count(),
+      this.db.processes.count(),
       this.db.traceLogs.orderBy('start').first(),
       this.db.traceLogs.orderBy('start').last(),
     ]);
-    return { traceLogs, traceBlobs, asyncOps, steps, oldest: oldest?.start ?? null, newest: newest?.start ?? null };
+    return { traceLogs, traceBlobs, asyncOps, steps, flowRuns, processes, oldest: oldest?.start ?? null, newest: newest?.start ?? null };
   }
 
   /** Deletes trace logs (and their text) created before `before`, and system jobs last modified before it. */
-  async prune(before: number): Promise<{ traceLogs: number; asyncOps: number }> {
-    return this.db.transaction('rw', this.db.traceLogs, this.db.traceBlobs, this.db.asyncOps, async () => {
+  async prune(before: number): Promise<{ traceLogs: number; asyncOps: number; flowRuns: number }> {
+    return this.db.transaction('rw', [this.db.traceLogs, this.db.traceBlobs, this.db.asyncOps, this.db.flowRuns, this.db.flowEvents], async () => {
       const oldIds = (await this.db.traceLogs.where('createdOn').below(before).primaryKeys()) as string[];
       await this.db.traceLogs.bulkDelete(oldIds);
       await this.db.traceBlobs.bulkDelete(oldIds);
       const asyncOps = await this.db.asyncOps.where('modifiedOn').below(before).delete();
-      return { traceLogs: oldIds.length, asyncOps };
+      const flowRuns = await this.db.flowRuns.where('modifiedOn').below(before).delete();
+      await this.db.flowEvents.where('createdOn').below(before).delete();
+      return { traceLogs: oldIds.length, asyncOps, flowRuns };
     });
   }
 

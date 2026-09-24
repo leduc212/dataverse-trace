@@ -77,7 +77,11 @@ export type CaveatCode =
   | 'asyncJobMissing'
   | 'traceTextUnreadable'
   | 'tracingOff'
-  | 'tracingExceptionsOnly';
+  | 'tracingExceptionsOnly'
+  | 'noOperationFound'
+  | 'inferredFlows'
+  | 'columnsUnknown'
+  | 'flowDataIncomplete';
 
 export interface Caveat {
   code: CaveatCode;

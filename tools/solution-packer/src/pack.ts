@@ -107,7 +107,7 @@ function validateConfig(config: SolutionConfig): void {
   }
 }
 
-export function solutionXml(config: SolutionConfig, files: readonly WebResourceFile[]): string {
+export function solutionXml(config: SolutionConfig, files: readonly WebResourceFile[], managed = false): string {
   const p = config.publisher;
   const address = (n: number) => `        <Address>
           <AddressNumber>${n}</AddressNumber>
@@ -151,7 +151,7 @@ export function solutionXml(config: SolutionConfig, files: readonly WebResourceF
       <Description description="${xml(config.description)}" languagecode="1033" />
     </Descriptions>
     <Version>${xml(config.version)}</Version>
-    <Managed>0</Managed>
+    <Managed>${managed ? 1 : 0}</Managed>
     <Publisher>
       <UniqueName>${xml(p.uniqueName)}</UniqueName>
       <LocalizedNames>
@@ -229,9 +229,14 @@ export function contentTypesXml(files: readonly WebResourceFile[]): string {
 
 export interface BuildOptions {
   maxFileBytes?: number;
+  /**
+   * Managed package: the same content with `<Managed>1</Managed>`, which is how the platform tells
+   * them apart. Managed solutions uninstall cleanly (deleting the solution removes the web resources).
+   */
+  managed?: boolean;
 }
 
-/** Builds an unmanaged solution zip containing the given web resources. Output is deterministic. */
+/** Builds a solution zip (unmanaged unless `options.managed`) with the given web resources. Output is deterministic. */
 export function buildSolutionZip(
   config: SolutionConfig,
   files: readonly WebResourceFile[],
@@ -254,7 +259,7 @@ export function buildSolutionZip(
   const mtime = new Date('2026-01-01T00:00:00Z');
   const entries: Zippable = {
     '[Content_Types].xml': [strToU8(contentTypesXml(sorted)), { mtime }],
-    'solution.xml': [strToU8(solutionXml(config, sorted)), { mtime }],
+    'solution.xml': [strToU8(solutionXml(config, sorted, options.managed ?? false)), { mtime }],
     'customizations.xml': [strToU8(customizationsXml(config, sorted)), { mtime }],
   };
   for (const f of sorted) {

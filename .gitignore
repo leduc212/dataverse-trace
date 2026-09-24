@@ -9,3 +9,5 @@ coverage/
 bin/
 obj/
 *.user
+test-results
+playwright-report

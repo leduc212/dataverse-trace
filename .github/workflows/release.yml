@@ -1,4 +1,5 @@
-# Push a tag like v0.1.0 to publish a GitHub Release with the solution zip attached.
+# Push a tag like v0.2.0 to publish a GitHub Release with the solution zips (unmanaged and managed)
+# attached, and the matching CHANGELOG.md section as its notes.
 # The tag must match "version" in solution/solution.config.json and apps/web/package.json.
 name: Release
 
@@ -28,9 +29,17 @@ jobs:
             exit 1
           fi
       - run: pnpm typecheck
-      - run: pnpm test
+      - run: pnpm coverage
       - run: pnpm solution
+      - name: Take the release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" 'index($0, "## [" v "]") == 1 {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md > out/release-notes.md
+          if [ ! -s out/release-notes.md ]; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
       - uses: softprops/action-gh-release@v3
         with:
           files: out/*.zip
-          generate_release_notes: true
+          body_path: out/release-notes.md

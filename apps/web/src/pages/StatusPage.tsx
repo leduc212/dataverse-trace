@@ -41,6 +41,9 @@ const SOURCE_LABELS: Record<string, string> = {
   asyncOps: 'System jobs',
   steps: 'Step registrations',
   traceBlobs: 'Trace text',
+  flowRuns: 'Cloud flow runs',
+  flowEvents: 'Flow run gaps (flow events)',
+  processes: 'Workflows, business rules and flows',
 };
 
 export function StatusPage() {
@@ -81,6 +84,15 @@ export function StatusPage() {
           <Check ok={caps?.canReadSteps ?? null} title="Step registrations">
             Used for stage, execution order and filtering attributes.
           </Check>
+          <Check ok={caps?.canReadFlowRuns ?? null} title="Cloud flow runs">
+            Used to put flows on a record's timeline (flow run history, kept 28 days by default).
+          </Check>
+          <Check ok={caps?.canReadProcesses ?? null} title="Processes">
+            Workflows, business rules and flow triggers, for expected vs. actual.
+          </Check>
+          <Check ok={caps ? caps.canReadAudit && caps.settings.isAuditEnabled !== false : null} title="Audit history">
+            Finds each save of a record, who made it and which columns changed. Needs auditing on for the table.
+          </Check>
           <Check ok={setting === 2 ? true : setting === null || setting === undefined ? null : false} title="Trace logging set to All">
             {setting === 1 ? 'Only failures are logged (Exceptions).' : setting === 0 ? 'Nothing is being logged (Off).' : 'Every execution is logged.'}
           </Check>
@@ -103,7 +115,7 @@ export function StatusPage() {
               </tr>
             </thead>
             <tbody>
-              {(['traceLogs', 'asyncOps', 'steps', 'traceBlobs'] as const).map((source) => {
+              {(['traceLogs', 'asyncOps', 'steps', 'flowRuns', 'flowEvents', 'processes', 'traceBlobs'] as const).map((source) => {
                 const s = status.sources.find((x) => x.source === source);
                 const live = status.progress.find((p) => p.source === source);
                 return (
@@ -134,6 +146,8 @@ export function StatusPage() {
               ['Trace texts', storage?.traceBlobs.toLocaleString('en-US')],
               ['System jobs', storage?.asyncOps.toLocaleString('en-US')],
               ['Steps', storage?.steps.toLocaleString('en-US')],
+              ['Flow runs', storage?.flowRuns.toLocaleString('en-US')],
+              ['Processes', storage?.processes.toLocaleString('en-US')],
               ['Oldest execution', storage?.oldest ? formatShortDateTime(storage.oldest) : '–'],
               ['Newest execution', storage?.newest ? formatShortDateTime(storage.newest) : '–'],
             ]}

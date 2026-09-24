@@ -44,9 +44,9 @@ export function layoutWaterfall(trace: Trace): WaterfallLayout {
   const parentOf = new Map<string, { id: string; confidence: number }>();
   /** Child ids per parent; `sequential` children (childOf) run inside the parent, the rest (followsFrom) were only triggered by it. */
   const children = new Map<string, Array<{ id: string; sequential: boolean }>>();
-  // Prefer childOf over followsFrom when a span has both; keep the most confident link.
+  // Prefer childOf over followsFrom/triggeredBy when a span has both; keep the most confident link.
   const tree = trace.links
-    .filter((l) => (l.type === 'childOf' || l.type === 'followsFrom') && byId.has(l.from) && byId.has(l.to))
+    .filter((l) => (l.type === 'childOf' || l.type === 'followsFrom' || l.type === 'triggeredBy') && byId.has(l.from) && byId.has(l.to))
     .sort((a, b) => cmp(a.type === 'childOf' ? 0 : 1, b.type === 'childOf' ? 0 : 1) || b.confidence - a.confidence);
   for (const l of tree) {
     if (parentOf.has(l.to) || l.from === l.to) continue;
@@ -84,7 +84,8 @@ export function layoutWaterfall(trace: Trace): WaterfallLayout {
     };
     rows.push(row);
     const entries = children.get(span.id) ?? [];
-    const sequentialIds = new Set(entries.filter((e) => e.sequential).map((e) => e.id));
+    /** childOf children run inside this span; the others were only triggered by it. */
+    const containedIds = new Set(entries.filter((e) => e.sequential).map((e) => e.id));
     const kids = entries.map((e) => byId.get(e.id)!).sort(siblingOrder);
     row.childIds = kids.map((k) => k.id);
     // Inside a request, its steps run one after another, and the request lasts until the last one
@@ -92,8 +93,10 @@ export function layoutWaterfall(trace: Trace): WaterfallLayout {
     let cursor = displayStart;
     let hasSequential = false;
     for (const kid of kids) {
-      const sequential = span.kind === 'request' && sequentialIds.has(kid.id);
-      const kidRow = place(kid, level + 1, span.id, sequential ? cursor : displayStart);
+      const sequential = span.kind === 'request' && containedIds.has(kid.id);
+      // Contained children (childOf) can't start before their parent; triggered ones keep their own
+      // start (a save is audited at commit, after the pipeline that it triggered has started).
+      const kidRow = place(kid, level + 1, span.id, sequential ? cursor : containedIds.has(kid.id) ? displayStart : kid.start);
       if (sequential) {
         cursor = Math.max(cursor, kidRow.displayEnd);
         hasSequential = true;
@@ -103,7 +106,7 @@ export function layoutWaterfall(trace: Trace): WaterfallLayout {
     // With whole-second timestamps a parent can come out shorter than the work inside it
     // (a job started and completed "in the same second" but ran a 152 ms activity). Stretch it.
     if (span.precision === 's' && span.kind !== 'request') {
-      for (const kid of rows.filter((r) => r.parentId === span.id && sequentialIds.has(r.span.id))) {
+      for (const kid of rows.filter((r) => r.parentId === span.id && containedIds.has(r.span.id))) {
         if (kid.displayEnd > row.displayEnd) {
           row.displayEnd = kid.displayEnd;
           row.estimated = true;

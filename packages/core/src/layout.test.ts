@@ -88,3 +88,31 @@ describe('layoutWaterfall', () => {
     expect(layout.end).toBe(T0 + 3500);
   });
 });
+
+describe('layoutWaterfall with record stories', () => {
+  it('puts the save first, with the operation and flow runs it triggered underneath on their own clocks', async () => {
+    const { buildRecordStory, findSaves } = await import('./record.ts');
+    const { audit, flowProcess, flowRun } = await import('./test-builders.ts');
+    const inp = {
+      record: { table: 'account', id: 'rec-1' },
+      audits: [audit({ createdOn: T0 + 50 })],
+      traceLogs: [traceLog({ correlationId: 'c1', start: T0, durationMs: 100 })],
+      asyncOps: [],
+      flowRuns: [flowRun({ id: 'r', start: T0 + 4000 })],
+      processes: [flowProcess()],
+      steps,
+    };
+    const story = buildRecordStory(findSaves(inp)[0]!, inp);
+    const layout = layoutWaterfall(story.trace);
+    expect(layout.rows[0]!.span.kind).toBe('audit');
+    const flow = layout.rows.find((r) => r.span.kind === 'flowRun')!;
+    expect(flow.parentId).toBe(layout.rows[0]!.span.id);
+    expect(flow.displayStart).toBe(T0 + 4000);
+    expect(flow.linkConfidence).toBeLessThan(1);
+    const request = layout.rows.find((r) => r.span.kind === 'request')!;
+    expect(request.parentId).toBe(layout.rows[0]!.span.id);
+    // Audited at commit (T0 + 50), but the pipeline it belongs to started at T0.
+    expect(request.displayStart).toBe(T0);
+    expect(request.estimated).toBe(false);
+  });
+});

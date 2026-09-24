@@ -106,6 +106,17 @@ describe('LocalStore', () => {
     expect(await store.getMeta('capabilities')).toEqual({ ok: true });
   });
 
+  it('stores flow runs and flow events, and replaces processes as a set', async () => {
+    const store = open();
+    await store.putFlowRuns([{ id: 'r1', modifiedOn: T0 } as never]);
+    await store.putFlowEvents([{ id: 'e1', createdOn: T0 } as never]);
+    await store.replaceProcesses([{ id: 'p1' } as never, { id: 'p2' } as never]);
+    await store.replaceProcesses([{ id: 'p3' } as never]);
+    expect((await store.allFlowRuns()).map((r) => r.id)).toEqual(['r1']);
+    expect((await store.allFlowEvents()).map((r) => r.id)).toEqual(['e1']);
+    expect((await store.allProcesses()).map((p) => p.id)).toEqual(['p3']);
+  });
+
   it('keeps environments separate', async () => {
     const a = open('a.crm.dynamics.com');
     const b = open('b.crm.dynamics.com');
@@ -118,7 +129,7 @@ describe('LocalStore', () => {
     await store.putTraceLogs([log({ id: 'old', createdOn: T0 - 1000, start: T0 - 1000 }), log({ id: 'new', createdOn: T0 + 1000, start: T0 + 1000 })]);
     await store.putTraceBlobs([{ id: 'old', messageBlock: 'x' }]);
     await store.putAsyncOperations([job({ modifiedOn: T0 - 1 }), job({ modifiedOn: T0 + 1 })]);
-    expect(await store.prune(T0)).toEqual({ traceLogs: 1, asyncOps: 1 });
-    expect(await store.summary()).toEqual({ traceLogs: 1, traceBlobs: 0, asyncOps: 1, steps: 0, oldest: T0 + 1000, newest: T0 + 1000 });
+    expect(await store.prune(T0)).toEqual({ traceLogs: 1, asyncOps: 1, flowRuns: 0 });
+    expect(await store.summary()).toEqual({ traceLogs: 1, traceBlobs: 0, asyncOps: 1, steps: 0, flowRuns: 0, processes: 0, oldest: T0 + 1000, newest: T0 + 1000 });
   });
 });

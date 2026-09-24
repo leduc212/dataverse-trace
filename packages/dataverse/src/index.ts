@@ -3,3 +3,4 @@ export * from './queries.ts';
 export * from './mappers.ts';
 export * from './probe.ts';
 export * from './sync.ts';
+export * from './ondemand.ts';

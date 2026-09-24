@@ -113,3 +113,103 @@ export interface OrganizationSettings {
 }
 
 export const TRACE_SETTING_LABELS = { 0: 'Off', 1: 'Exceptions', 2: 'All' } as const;
+
+/** One `flowrun` row (cloud flow run history in Dataverse). */
+export interface FlowRunRecord {
+  id: string;
+  /** The run's own id (`name`), which child runs reference as `parentRunId`. */
+  runId: string;
+  workflowId: string | null;
+  flowName: string | null;
+  start: EpochMs;
+  end: EpochMs | null;
+  durationMs: number | null;
+  /** Normalised from the `status` string. */
+  status: 'succeeded' | 'failed' | 'cancelled' | 'running' | 'other';
+  statusLabel: string;
+  triggerType: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  parentRunId: string | null;
+  createdOn: EpochMs;
+  modifiedOn: EpochMs;
+  ownerId: string | null;
+  ownerName: string | null;
+  precision: TimePrecision;
+}
+
+/** One `flowevent` row: signals that flow run history may be incomplete. */
+export interface FlowEventRecord {
+  id: string;
+  eventType: string;
+  eventCode: string;
+  level: string | null;
+  name: string | null;
+  createdOn: EpochMs;
+  parentObjectId: string | null;
+}
+
+export type ChangeKind = 'create' | 'update' | 'delete';
+
+/** A cloud flow's Dataverse trigger ("When a row is added, modified or deleted"). */
+export interface FlowTrigger {
+  table: string;
+  changes: ChangeKind[];
+  /** `null` = fires on any column. */
+  filteringAttributes: string[] | null;
+  /** OData `$filter` the row must match, or `null`. */
+  filterExpression: string | null;
+  /** 1 User, 2 Business unit, 3 Parent-child business units, 4 Organization. */
+  scope: number | null;
+  /** Trigger conditions (Logic Apps expressions). We can't evaluate these. */
+  conditions: string[];
+  delayed: boolean;
+}
+
+export type ProcessCategory = 'workflow' | 'businessRule' | 'flow' | 'other';
+
+/** A classic workflow, business rule or cloud flow definition (`workflow` rows of type Definition). */
+export interface ProcessDefinition {
+  id: string;
+  name: string;
+  category: ProcessCategory;
+  categoryCode: number;
+  /** Activated (state 1). */
+  active: boolean;
+  primaryEntity: string | null;
+  /** Classic workflows: background or real-time. */
+  mode: 'background' | 'realtime' | null;
+  scope: number | null;
+  triggerOnCreate: boolean;
+  triggerOnDelete: boolean;
+  /** Classic workflows: columns that trigger it on update; `null` = not triggered by updates. */
+  triggerOnUpdateAttributes: string[] | null;
+  /** Classic workflows: ids of activation rows, which system jobs reference. */
+  activationIds: string[];
+  /** Cloud flows with a Dataverse trigger. */
+  flowTrigger: FlowTrigger | null;
+  /**
+   * Cloud flows: whether a live trigger subscription (`callbackregistration`) matches the trigger.
+   * Undefined or null = not checked (no read access, or not a flow).
+   */
+  subscription?: 'found' | 'missing' | null;
+  modifiedOn: EpochMs;
+}
+
+/** One audited change of a record. `changedColumns` is `null` until the details are loaded. */
+export interface AuditRecord {
+  id: string;
+  table: string;
+  recordId: string;
+  operation: ChangeKind | 'other';
+  action: number;
+  actionLabel: string;
+  createdOn: EpochMs;
+  userId: string | null;
+  userName: string | null;
+  transactionId: string | null;
+  changedColumns: string[] | null;
+  /** New values of the changed columns, when details are loaded. */
+  newValues: Record<string, unknown> | null;
+  precision: TimePrecision;
+}

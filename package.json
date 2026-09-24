@@ -10,6 +10,8 @@
   },
   "scripts": {
     "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "e2e": "pnpm --filter @dvt/web e2e",
     "typecheck": "pnpm -r --parallel typecheck",
     "dev": "pnpm --filter @dvt/web dev",
     "build": "pnpm --filter @dvt/web build",
@@ -21,8 +23,9 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^5.0.1",
+    "cross-env": "^10.1.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1",
-    "cross-env": "^10.1.0"
+    "vitest": "^5.0.1"
   }
 }

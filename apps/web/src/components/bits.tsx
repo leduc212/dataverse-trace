@@ -1,6 +1,7 @@
-import { formatDuration } from '@dvt/core';
+import { formatDuration, type Caveat } from '@dvt/core';
+import { MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { ErrorCircleFilled } from '@fluentui/react-icons';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 /** Duration with an inline bar on a log scale, so 20 ms and 20 s are both visible. */
 export function DurationCell({ ms, maxMs = 30_000, error = false }: { ms: number; maxMs?: number; error?: boolean }) {
@@ -32,6 +33,26 @@ export function EmptyState({ icon, title, children }: { icon?: ReactNode; title:
         <div>{children}</div>
       </div>
     </div>
+  );
+}
+
+/** A trace's caveats in one compact bar (one line each), so they don't push the timeline off screen. */
+export function Caveats({ caveats, style }: { caveats: readonly Caveat[]; style?: CSSProperties }) {
+  if (!caveats.length) return null;
+  return (
+    <MessageBar intent="info" layout="multiline" className="caveats" {...(style ? { style } : {})}>
+      <MessageBarBody>
+        {caveats.length === 1 ? (
+          caveats[0]!.message
+        ) : (
+          <ul>
+            {caveats.map((c) => (
+              <li key={c.code}>{c.message}</li>
+            ))}
+          </ul>
+        )}
+      </MessageBarBody>
+    </MessageBar>
   );
 }
 

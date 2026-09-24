@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapAsyncOperation, mapStep, mapTraceBlob, mapTraceLog, precisionOf } from './mappers.ts';
+import { auditChanges, mapAsyncOperation, mapAudit, mapFlowEvent, mapFlowRun, mapProcesses, mapStep, mapTraceBlob, mapTraceLog, precisionOf } from './mappers.ts';
 import { addGap } from './sync.ts';
 import { stepsByIdQuery, traceLogsQuery } from './queries.ts';
 
@@ -151,5 +151,76 @@ describe('addGap', () => {
       [10, 35],
       [50, 60],
     ]);
+  });
+});
+
+describe('v0.2 mappers', () => {
+  it('maps a flow run, with its status and whole-second precision', () => {
+    const run = mapFlowRun({
+      flowrunid: 'f1',
+      name: '08584000000000000000CU12',
+      starttime: '2026-09-24T08:14:03Z',
+      endtime: '2026-09-24T08:14:12Z',
+      duration: 9120,
+      status: 'Failed',
+      triggertype: 'Automated',
+      errorcode: 'ActionFailed',
+      errormessage: 'An action failed.',
+      parentrunid: null,
+      _workflow_value: 'w1',
+      [`_workflow_value${FV}`]: 'Notify underwriter',
+      createdon: '2026-09-24T08:15:40Z',
+      modifiedon: '2026-09-24T08:15:40Z',
+    });
+    expect(run).toMatchObject({ id: 'f1', runId: '08584000000000000000CU12', workflowId: 'w1', flowName: 'Notify underwriter', status: 'failed', durationMs: 9120, precision: 's' });
+    expect(run.end! - run.start).toBe(9000);
+    expect(mapFlowRun({ flowrunid: 'f2', starttime: '2026-09-24T08:14:03Z', status: 'Running' })).toMatchObject({ status: 'running', end: null, durationMs: null });
+  });
+
+  it('maps a flow event', () => {
+    expect(mapFlowEvent({ floweventid: 'e1', eventtype: 'FlowRunIngestion', eventcode: 'Delayed', level: 'Warning', createdon: '2026-09-24T08:00:00Z' })).toMatchObject({ id: 'e1', eventType: 'FlowRunIngestion', level: 'Warning' });
+  });
+
+  it('folds workflow activations into their definition and parses flow triggers', () => {
+    const clientdata = JSON.stringify({
+      properties: { definition: { triggers: { t: { inputs: { parameters: { 'subscriptionRequest/message': 3, 'subscriptionRequest/entityname': 'account', 'subscriptionRequest/filteringattributes': 'name, telephone1' } } } } } },
+    });
+    const processes = mapProcesses(
+      [
+        { workflowid: 'W1', name: 'Risk', category: 0, type: 1, statecode: 1, primaryentity: 'hbr_policy', mode: 0, triggeroncreate: true, triggeronupdateattributelist: 'hbr_premium,hbr_status' },
+        { workflowid: 'a1', category: 0, type: 2, _parentworkflowid_value: 'w1' },
+        { workflowid: 'F1', name: 'Marketing', category: 5, type: 1, statecode: 0, primaryentity: 'account' },
+        { workflowid: 'b1', name: 'Rule', category: 2, type: 1, statecode: 1, primaryentity: 'none' },
+      ],
+      new Map([['f1', clientdata]]),
+    );
+    const [risk, flow, rule] = processes;
+    expect(risk).toMatchObject({ category: 'workflow', active: true, mode: 'background', triggerOnCreate: true, triggerOnUpdateAttributes: ['hbr_premium', 'hbr_status'], activationIds: ['a1', 'W1'] });
+    expect(flow).toMatchObject({ category: 'flow', active: false, flowTrigger: { table: 'account', changes: ['update'], filteringAttributes: ['name', 'telephone1'] } });
+    expect(rule).toMatchObject({ category: 'businessRule', primaryEntity: null, flowTrigger: null });
+  });
+
+  it('maps audit rows and reads changed columns from audit details', () => {
+    const audit = mapAudit({
+      auditid: 'au1',
+      action: 2,
+      [`action${FV}`]: 'Update',
+      operation: 2,
+      createdon: '2026-09-24T08:14:01Z',
+      _userid_value: 'u1',
+      [`_userid_value${FV}`]: 'Jamie Ortiz',
+      transactionid: 't1',
+      _objectid_value: 'r1',
+      objecttypecode: 'hbr_policy',
+    });
+    expect(audit).toMatchObject({ id: 'au1', table: 'hbr_policy', recordId: 'r1', operation: 'update', actionLabel: 'Update', userName: 'Jamie Ortiz', changedColumns: null });
+    const changes = auditChanges({
+      AuditDetail: {
+        '@odata.type': '#Microsoft.Dynamics.CRM.AttributeAuditDetail',
+        OldValue: { '@odata.type': '#Microsoft.Dynamics.CRM.hbr_policy', hbr_status: 1, _ownerid_value: 'u1' },
+        NewValue: { '@odata.type': '#Microsoft.Dynamics.CRM.hbr_policy', hbr_status: 2, [`hbr_status${FV}`]: 'Active', _ownerid_value: 'u2' },
+      },
+    });
+    expect(changes).toEqual({ changedColumns: ['hbr_status', 'ownerid'], newValues: { hbr_status: 2, ownerid: 'u2' } });
   });
 });

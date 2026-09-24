@@ -136,7 +136,8 @@ export function assembleTrace(correlationId: string, input: CorrelationInput): T
   }
   const requestSpans: Span[] = [];
   /** Total execution time of a request's steps: they run one after another, so the request takes at least this long. */
-  const workMs = new Map<string, number>();  for (const [key, members] of [...requests.entries()].sort(([a], [b]) => cmp(a, b))) {
+  const workMs = new Map<string, number>();
+  for (const [key, members] of [...requests.entries()].sort(([a], [b]) => cmp(a, b))) {
     members.sort(pipelineOrder);
     const first = members[0]!;
     const precision: TimePrecision = members.some((m) => m.precision === 's') ? 's' : 'ms';
@@ -162,7 +163,8 @@ export function assembleTrace(correlationId: string, input: CorrelationInput): T
     if (first.requestId) request.requestId = first.requestId;
     request.correlationId = correlationId;
     requestSpans.push(request);
-    workMs.set(request.id, members.reduce((sum, m) => sum + (m.metrics.durationMs ?? 0), 0));    for (const m of members) link(request.id, m.id, 'R2', 1, 'same correlation id + request id + depth');
+    workMs.set(request.id, members.reduce((sum, m) => sum + (m.metrics.durationMs ?? 0), 0));
+    for (const m of members) link(request.id, m.id, 'R2', 1, 'same correlation id + request id + depth');
   }
   spans.push(...requestSpans);
 
@@ -260,7 +262,7 @@ export function assembleTrace(correlationId: string, input: CorrelationInput): T
   return trace;
 }
 
-function summarize(spans: Span[], rootRequest: Span | undefined): TraceSummary {
+export function summarize(spans: Span[], rootRequest: Span | undefined): TraceSummary {
   const starts = spans.map((s) => s.queuedAt ?? s.start);
   const ends = spans.map(endOf);
   const start = Math.min(...starts);

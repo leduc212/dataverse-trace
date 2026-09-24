@@ -1,5 +1,11 @@
 // Raw Web API rows → typed records. The only place that knows column names and annotation keys.
+import { parseFlowTrigger, toSubscription, type TriggerSubscription } from '@dvt/core';
 import type {
+  AuditRecord,
+  FlowEventRecord,
+  FlowRunRecord,
+  ProcessCategory,
+  ProcessDefinition,
   AsyncOperationRecord,
   RecordRef,
   Stage,
@@ -136,4 +142,161 @@ export function mapStep(row: Raw): StepRegistration {
     impersonatingUserId: str(row['_impersonatinguserid_value']),
     isManaged: row['ismanaged'] === true,
   };
+}
+
+// ── v0.2: flows, processes, audit ────────────────────────────────────────────
+
+function flowStatus(raw: string | null): FlowRunRecord['status'] {
+  switch ((raw ?? '').toLowerCase()) {
+    case 'succeeded':
+    case 'success':
+      return 'succeeded';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+    case 'canceled':
+      return 'cancelled';
+    case 'running':
+    case 'waiting':
+      return 'running';
+    default:
+      return 'other';
+  }
+}
+
+export function mapFlowRun(row: Raw): FlowRunRecord {
+  const start = required(time(row['starttime']) ?? time(row['createdon']), 'starttime', row);
+  const statusLabel = str(row['status']) ?? 'Unknown';
+  const end = time(row['endtime']);
+  return {
+    id: required(str(row['flowrunid']), 'flowrunid', row),
+    runId: str(row['name']) ?? '',
+    workflowId: str(row['_workflow_value']) ?? str(row['workflowid']),
+    flowName: formatted(row, '_workflow_value') ?? null,
+    start,
+    end,
+    durationMs: num(row['duration']) ?? (end !== null ? end - start : null),
+    status: flowStatus(statusLabel),
+    statusLabel,
+    triggerType: str(row['triggertype']),
+    errorCode: str(row['errorcode']),
+    errorMessage: str(row['errormessage']),
+    parentRunId: str(row['parentrunid']),
+    createdOn: time(row['createdon']) ?? start,
+    modifiedOn: time(row['modifiedon']) ?? start,
+    ownerId: str(row['_ownerid_value']),
+    ownerName: formatted(row, '_ownerid_value') ?? null,
+    precision: precisionOf(row['starttime'], row['endtime']),
+  };
+}
+
+export function mapFlowEvent(row: Raw): FlowEventRecord {
+  return {
+    id: required(str(row['floweventid']), 'floweventid', row),
+    eventType: str(row['eventtype']) ?? '',
+    eventCode: str(row['eventcode']) ?? '',
+    level: str(row['level']),
+    name: str(row['name']),
+    createdOn: required(time(row['createdon']), 'createdon', row),
+    parentObjectId: str(row['_parentobjectid_value']),
+  };
+}
+
+const CATEGORIES: Record<number, ProcessCategory> = { 0: 'workflow', 2: 'businessRule', 5: 'flow' };
+
+/**
+ * Turns workflow rows into process definitions: activation rows (type 2) are folded into their
+ * definition's `activationIds`, and flow definitions get their parsed trigger from `clientdata`.
+ */
+export function mapProcesses(rows: readonly Raw[], clientdata: ReadonlyMap<string, unknown>): ProcessDefinition[] {
+  const definitions = new Map<string, ProcessDefinition>();
+  const activations: Array<{ id: string; parent: string | null }> = [];
+  for (const row of rows) {
+    const id = str(row['workflowid']);
+    if (!id) continue;
+    if (row['type'] === 2) {
+      activations.push({ id, parent: str(row['_parentworkflowid_value']) });
+      continue;
+    }
+    const categoryCode = num(row['category']) ?? -1;
+    const category = CATEGORIES[categoryCode] ?? 'other';
+    const mode = num(row['mode']);
+    const updateList = str(row['triggeronupdateattributelist'])
+      ?.split(',')
+      .map((c) => c.trim().toLowerCase())
+      .filter(Boolean);
+    const primary = str(row['primaryentity']);
+    definitions.set(id.toLowerCase(), {
+      id,
+      name: str(row['name']) ?? '(unnamed process)',
+      category,
+      categoryCode,
+      active: row['statecode'] === 1,
+      primaryEntity: primary && primary !== 'none' ? primary.toLowerCase() : null,
+      mode: category === 'workflow' ? (mode === 1 ? 'realtime' : 'background') : null,
+      scope: num(row['scope']),
+      triggerOnCreate: row['triggeroncreate'] === true,
+      triggerOnDelete: row['triggerondelete'] === true,
+      triggerOnUpdateAttributes: updateList && updateList.length ? updateList : null,
+      activationIds: [],
+      flowTrigger: category === 'flow' ? parseFlowTrigger(clientdata.get(id.toLowerCase()) ?? null) : null,
+      modifiedOn: time(row['modifiedon']) ?? 0,
+    });
+  }
+  for (const a of activations) {
+    const parent = a.parent ? definitions.get(a.parent.toLowerCase()) : undefined;
+    if (parent) parent.activationIds.push(a.id);
+  }
+  // A definition id also identifies it in system jobs of some workflows.
+  for (const d of definitions.values()) if (d.category === 'workflow') d.activationIds.push(d.id);
+  return [...definitions.values()];
+}
+
+const AUDIT_OPERATIONS: Record<number, AuditRecord['operation']> = { 1: 'create', 2: 'update', 3: 'delete' };
+
+export function mapAudit(row: Raw): AuditRecord {
+  const createdOn = required(time(row['createdon']), 'createdon', row);
+  const action = num(row['action']) ?? 0;
+  return {
+    id: required(str(row['auditid']), 'auditid', row),
+    table: str(row['objecttypecode']) ?? '',
+    recordId: required(str(row['_objectid_value']), '_objectid_value', row),
+    operation: AUDIT_OPERATIONS[num(row['operation']) ?? 0] ?? 'other',
+    action,
+    actionLabel: formatted(row, 'action') ?? String(action),
+    createdOn,
+    userId: str(row['_userid_value']),
+    userName: formatted(row, '_userid_value') ?? null,
+    transactionId: str(row['transactionid']),
+    changedColumns: null,
+    newValues: null,
+    precision: precisionOf(row['createdon']),
+  };
+}
+
+/**
+ * Changed columns and new values from a RetrieveAuditDetails response. Lookups come back as
+ * `_x_value`; they're reported by column name (`x`). Annotations are dropped.
+ */
+export function auditChanges(response: Raw): { changedColumns: string[]; newValues: Record<string, unknown> } {
+  const detail = (response['AuditDetail'] ?? {}) as Raw;
+  const clean = (values: unknown): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    if (!values || typeof values !== 'object') return out;
+    for (const [key, value] of Object.entries(values as Raw)) {
+      if (key.includes('@')) continue;
+      const lookup = /^_(.+)_value$/.exec(key);
+      out[lookup ? lookup[1]! : key] = value;
+    }
+    return out;
+  };
+  const oldValues = clean(detail['OldValue']);
+  const newValues = clean(detail['NewValue']);
+  const changedColumns = [...new Set([...Object.keys(oldValues), ...Object.keys(newValues)])].sort();
+  return { changedColumns, newValues };
+}
+
+/** A `callbackregistration` row as a trigger subscription, or null when it isn't a row trigger. */
+export function mapCallbackRegistration(row: Raw): TriggerSubscription | null {
+  return toSubscription(row['entityname'], row['message'], row['filteringattributes'], row['filterexpression']);
 }
