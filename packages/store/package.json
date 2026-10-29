@@ -12,9 +12,9 @@
   "dependencies": {
     "@dvt/core": "workspace:*",
     "@dvt/dataverse": "workspace:*",
-    "dexie": "^4.4.6"
+    "dexie": "^4.4.7"
   },
   "devDependencies": {
-    "fake-indexeddb": "^6.2.5"
+    "fake-indexeddb": "^6.2.6"
   }
 }
